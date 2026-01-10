@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for very-new-meilin-ai-app on 2026-01-10T17:08:36Z
+# fly.toml app configuration file generated for meilin on 2026-01-10T17:32:16Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'new-new-meilin-ai-app'
+app = 'meilin'
 primary_region = 'sin'
 
 [build]
