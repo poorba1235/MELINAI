@@ -63,25 +63,17 @@ function TanakiExperience() {
   const [isMuted, setIsMuted] = useState(false);
   const [userMessages, setUserMessages] = useState<{id: string, text: string, timestamp: Date, isAI: boolean}[]>([]);
 
-  // Track events that happened BEFORE this session started
-  const componentMountedRef = useRef(false);
-  const initialEventsProcessedRef = useRef(false);
+  // Track which AI responses we've already processed
+  const processedAIResponseIds = useRef<Set<string>>(new Set());
   
-  // Track the timestamp when component mounted
-  const sessionStartTimeRef = useRef<Date>(new Date());
+  // Track when we sent our last message to know which AI response is for us
+  const lastMessageSentTime = useRef<Date | null>(null);
+  const waitingForResponse = useRef(false);
 
   const unlockOnce = useCallback(() => {
     if (unlockedOnceRef.current) return;
     unlockedOnceRef.current = true;
     void audioRef.current?.unlock();
-  }, []);
-
-  // Mark component as mounted
-  useEffect(() => {
-    componentMountedRef.current = true;
-    return () => {
-      componentMountedRef.current = false;
-    };
   }, []);
 
   // When Tanaki says something new, update aria-live text
@@ -163,22 +155,11 @@ function TanakiExperience() {
     };
   }, []);
 
-  // Process NEW AI responses that happen AFTER this session started
+  // Process AI responses - FIXED: Only add responses that come AFTER our messages
   useEffect(() => {
-    // Skip processing if we haven't marked component as mounted yet
-    if (!componentMountedRef.current || !initialEventsProcessedRef.current) return;
-
-    const newAIResponses = events
-      .filter(e => {
-        // Only process events that happened AFTER our session started
-        const eventTime = e._timestamp ? new Date(e._timestamp) : new Date();
-        return (
-          e._kind === "interactionRequest" && 
-          e.action === "says" && 
-          e.content &&
-          eventTime >= sessionStartTimeRef.current
-        );
-      })
+    // Get all AI responses from events
+    const aiResponses = events
+      .filter(e => e._kind === "interactionRequest" && e.action === "says" && e.content)
       .map(event => ({
         id: event._id,
         text: event.content,
@@ -186,28 +167,38 @@ function TanakiExperience() {
         isAI: true
       }));
 
+    if (aiResponses.length === 0) return;
+
+    // Filter out responses we've already processed
+    const newAIResponses = aiResponses.filter(response => 
+      !processedAIResponseIds.current.has(response.id)
+    );
+
     if (newAIResponses.length === 0) return;
 
-    // Add new AI responses to userMessages
-    setUserMessages(prev => {
-      const existingIds = new Set(prev.map(msg => msg.id));
-      const messagesToAdd = newAIResponses.filter(msg => !existingIds.has(msg.id));
-      
-      if (messagesToAdd.length === 0) return prev;
-      
-      return [...prev, ...messagesToAdd];
-    });
-  }, [events]);
+    // If we're waiting for a response, add the most recent one
+    if (waitingForResponse.current && lastMessageSentTime.current) {
+      // Get the most recent AI response that came after our last message
+      const responsesAfterOurMessage = newAIResponses.filter(response => 
+        response.timestamp > lastMessageSentTime.current!
+      );
 
-  // Mark initial events as processed after first render
-  useEffect(() => {
-    // Give a small delay to ensure component is mounted
-    const timer = setTimeout(() => {
-      initialEventsProcessedRef.current = true;
-    }, 100);
-    
-    return () => clearTimeout(timer);
-  }, []);
+      if (responsesAfterOurMessage.length > 0) {
+        // Take the first response that came after our message
+        const responseForUs = responsesAfterOurMessage[0];
+        
+        // Mark as processed
+        processedAIResponseIds.current.add(responseForUs.id);
+        
+        // Add to our messages
+        setUserMessages(prev => [...prev, responseForUs]);
+        
+        // We got our response, stop waiting
+        waitingForResponse.current = false;
+        lastMessageSentTime.current = null;
+      }
+    }
+  }, [events]);
 
   const handleSendMessage = async (text: string) => {
     if (!text.trim() || !connected) return;
@@ -221,6 +212,11 @@ function TanakiExperience() {
     };
     
     setUserMessages(prev => [...prev, userMessage]);
+    
+    // Track that we sent a message and are waiting for response
+    lastMessageSentTime.current = new Date();
+    waitingForResponse.current = true;
+    
     unlockOnce();
     await send(text);
   };
@@ -233,6 +229,9 @@ function TanakiExperience() {
   const clearChat = () => {
     if (confirm("Clear your chat history?")) {
       setUserMessages([]);
+      processedAIResponseIds.current.clear();
+      lastMessageSentTime.current = null;
+      waitingForResponse.current = false;
     }
   };
 
@@ -437,7 +436,7 @@ function TanakiExperience() {
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 rounded-2xl bg-black/10 border border-cyan-500/10 shadow-inner mt-3">
-            {/* Show ONLY userMessages (which contains only messages from this session) */}
+            {/* Show ONLY userMessages (no events array mixing) */}
             {userMessages.length > 0 ? (
               userMessages
                 .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
