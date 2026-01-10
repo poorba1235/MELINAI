@@ -1,4 +1,4 @@
-app = "MEILIN-AI-app"
+app = "meilin-ai-app"
 primary_region = "sin"
 
 [build]
