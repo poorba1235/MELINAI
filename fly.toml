@@ -1,0 +1,22 @@
+app = "very-new-meilin-ai-app"
+primary_region = "sin"
+
+[build]
+dockerfile = "Dockerfile"
+
+[http_service]
+auto_start_machines = true
+auto_stop_machines = true
+force_https = true
+internal_port = 3_002
+min_machines_running = 2
+processes = [ "app" ]
+
+[[metrics]]
+path = "/metrics"
+port = 9_091
+
+[[vm]]
+cpus = 2
+memory = "4gb"
+memory_mb = 4_096

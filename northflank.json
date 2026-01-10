@@ -1,0 +1,51 @@
+{
+  "apiVersion": "v1.2",
+  "spec": {
+    "kind": "Workflow",
+    "spec": {
+      "type": "sequential",
+      "steps": [
+        {
+          "kind": "Project",
+          "ref": "project",
+          "spec": {
+            "name": "miyu",
+            "color": "#57637A",
+            "networking": {
+              "tailscale": {
+                "authKeyTags": [],
+                "enabled": false
+              },
+              "allowedIngressProjects": []
+            },
+            "region": "asia-southeast"
+          }
+        },
+        {
+          "kind": "Workflow",
+          "spec": {
+            "type": "sequential",
+            "context": {
+              "projectId": "${refs.project.id}"
+            },
+            "steps": []
+          }
+        }
+      ]
+    }
+  },
+  "name": "miyu",
+  "description": "",
+  "options": {
+    "autorun": false,
+    "concurrencyPolicy": "allow"
+  },
+  "gitops": {
+    "repoUrl": "https://github.com/poorba1235/miyu_soul_app",
+    "vcsService": "github",
+    "accountLogin": "poorba1235",
+    "branch": "main",
+    "filePath": "/northflank.json"
+  },
+  "$schema": "https://api.northflank.com/v1/schemas/template"
+}

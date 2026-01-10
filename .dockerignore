@@ -1,0 +1,8 @@
+data
+.env
+.env*
+dist
+supabase
+node_modules
+/tests
+fly.toml
