@@ -54,6 +54,8 @@ FROM deps AS builder
 COPY . .
 
 
+RUN git lfs pull
+
 # Generate prisma client
 WORKDIR /app/opensouls/packages/soul-engine-cloud
 RUN bunx --bun prisma generate
