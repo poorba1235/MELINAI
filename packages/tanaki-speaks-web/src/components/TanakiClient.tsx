@@ -63,6 +63,7 @@ function TanakiExperience() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [userMessages, setUserMessages] = useState<{id: string, text: string, timestamp: Date}[]>([]);
 
   const unlockOnce = useCallback(() => {
     if (unlockedOnceRef.current) return;
@@ -151,12 +152,21 @@ function TanakiExperience() {
   }, []);
 
   // Simple send function - EXACT from working code
-  const handleSendMessage = async (text: string) => {
-    if (!text.trim() || !connected) return;
-    
-    unlockOnce();
-    await send(text);
+const handleSendMessage = async (text: string) => {
+  if (!text.trim() || !connected) return;
+  
+  // Add user message to UI immediately
+  const userMessage = {
+    id: `user_${Date.now()}`,
+    text: text,
+    timestamp: new Date()
   };
+  setUserMessages(prev => [...prev, userMessage]);
+  
+  unlockOnce();
+  await send(text);
+};
+
 
   const toggleMute = () => {
     setIsMuted(!isMuted);
@@ -327,65 +337,89 @@ function TanakiExperience() {
         </div>
 
         {/* Chat Interface */}
-        <div
-          ref={overlayRef}
-          className="w-full md:w-[480px] h-[55vh] md:h-[75vh] flex flex-col bg-gradient-to-br from-gray-900/10 to-cyan-900/10 p-5 rounded-3xl shadow-2xl border border-cyan-500/20 pointer-events-auto fixed bottom-0 left-0 md:relative md:bottom-auto md:left-auto mobile-chat"
-          style={{ pointerEvents: "auto" as const }}
-        >
-          <div className="flex items-center justify-between p-4 rounded-2xl bg-gradient-to-r from-cyan-500/10 to-purple-500/10 border border-cyan-500/20 shadow-inner">
-            <div className="flex items-center gap-3">
-              <div className="w-3 h-3 bg-cyan-400 rounded-full animate-pulse"></div>
-              <span className="text-cyan-300 font-bold text-lg tracking-wide" style={{ fontFamily: "'Orbitron', sans-serif" }}>
-                NEURAL_CHAT
-              </span>
-            </div>
-            <div className="flex items-center gap-2 text-cyan-200/70 text-sm">
-              <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-              <span style={{ fontFamily: "'Rajdhani', sans-serif" }}>SYSTEM ACTIVE</span>
-            </div>
+ <div
+        ref={overlayRef}
+        className="w-full md:w-[480px] h-[55vh] md:h-[75vh] flex flex-col bg-gradient-to-br from-gray-900/10 to-cyan-900/10 p-5 rounded-3xl shadow-2xl border border-cyan-500/20 pointer-events-auto fixed bottom-0 left-0 md:relative md:bottom-auto md:left-auto mobile-chat"
+        style={{ pointerEvents: "auto" as const }}
+      >
+        <div className="flex items-center justify-between p-4 rounded-2xl bg-gradient-to-r from-cyan-500/10 to-purple-500/10 border border-cyan-500/20 shadow-inner">
+          <div className="flex items-center gap-3">
+            <div className="w-3 h-3 bg-cyan-400 rounded-full animate-pulse"></div>
+            <span className="text-cyan-300 font-bold text-lg tracking-wide" style={{ fontFamily: "'Orbitron', sans-serif" }}>
+              NEURAL_CHAT
+            </span>
           </div>
-
-          <div className="flex-1 overflow-y-auto p-4 rounded-2xl bg-black/10 border border-cyan-500/10 shadow-inner mt-3">
-            {/* Simple chat display from events - similar to FloatingBubbles concept */}
-            {events
-              .filter(e => e._kind === "interactionRequest" && e.action === "says" && e.content)
-              .slice(-5) // Show last 5 messages like maxBubbles: 5
-              .map((event, index) => (
-                <div 
-                  key={event._id}
-                  className="mb-3 p-3 rounded-xl bg-purple-500/10 border border-purple-500/30"
-                >
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="w-2 h-2 bg-purple-400 rounded-full"></div>
-                    <strong className="text-sm text-purple-300">MEILIN</strong>
-                  </div>
-                  <div className="text-sm text-purple-100">{event.content}</div>
-                </div>
-              ))}
-            
-            {events.filter(e => e._kind === "interactionRequest" && e.action === "says").length === 0 && (
-              <div className="text-center py-8 text-cyan-300/50">
-                <div className="text-lg mb-2">Start a conversation with MEILIN</div>
-                <div className="text-sm">Ask anything and get AI-powered responses</div>
-              </div>
-            )}
-          </div>
-
-          {/* Chat Input - SIMPLE like working code */}
-          <div className="mt-4">
-            <ChatInput
-              disabled={!connected}
-              onUserGesture={unlockOnce}
-              isRecording={isRecording}
-              onVoiceClick={() => setIsRecording(!isRecording)}
-              onSend={async (text) => {
-                unlockOnce();
-                await send(text);
-              }}
-              placeholder="Type your message..."
-            />
+          <div className="flex items-center gap-2 text-cyan-200/70 text-sm">
+            <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+            <span style={{ fontFamily: "'Rajdhani', sans-serif" }}>SYSTEM ACTIVE</span>
           </div>
         </div>
+
+        <div className="flex-1 overflow-y-auto p-4 rounded-2xl bg-black/10 border border-cyan-500/10 shadow-inner mt-3">
+          {[...userMessages, ...events
+            .filter(e => e._kind === "interactionRequest" && e.action === "says" && e.content)
+            .map(event => ({
+              id: event._id,
+              text: event.content,
+              timestamp: new Date(event._timestamp || Date.now()),
+              isAI: true
+            }))]
+            .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+            .slice(-10) // Show last 10 messages total
+            .map((msg) => (
+              <div 
+                key={msg.id}
+                className={`mb-3 p-3 rounded-xl ${
+                  msg.isAI 
+                    ? "bg-purple-500/10 border border-purple-500/30 ml-8" 
+                    : "bg-cyan-500/10 border border-cyan-500/30 mr-8"
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <div className={`w-2 h-2 rounded-full ${
+                    msg.isAI ? "bg-purple-400" : "bg-cyan-400"
+                  }`}></div>
+                  <strong className={`text-sm ${
+                    msg.isAI ? "text-purple-300" : "text-cyan-300"
+                  }`}>
+                    {msg.isAI ? "MEILIN" : "YOU"}
+                  </strong>
+                  {!msg.isAI && (
+                    <div className="flex items-center gap-1 bg-cyan-500/20 px-2 py-1 rounded-full">
+                      <span className="text-xs text-cyan-300 font-medium">LIVE</span>
+                      <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-pulse"></div>
+                    </div>
+                  )}
+                </div>
+                <div className={`text-sm ${
+                  msg.isAI ? "text-purple-100" : "text-cyan-100"
+                }`}>
+                  {msg.text}
+                </div>
+              </div>
+            ))}
+          
+          {userMessages.length === 0 && 
+           events.filter(e => e._kind === "interactionRequest" && e.action === "says").length === 0 && (
+            <div className="text-center py-8 text-cyan-300/50">
+              <div className="text-lg mb-2">Start a conversation with MEILIN</div>
+              <div className="text-sm">Ask anything and get AI-powered responses</div>
+            </div>
+          )}
+        </div>
+
+        {/* Chat Input */}
+        <div className="mt-4">
+          <ChatInput
+            disabled={!connected}
+            onUserGesture={unlockOnce}
+            isRecording={isRecording}
+            onVoiceClick={() => setIsRecording(!isRecording)}
+            onSend={handleSendMessage} // Use the updated function
+            placeholder="Type your message..."
+          />
+        </div>
+      </div>
 
         {/* Mute Button */}
         <button
