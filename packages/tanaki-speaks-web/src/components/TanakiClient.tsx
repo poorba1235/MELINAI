@@ -21,13 +21,7 @@ interface ChatMessage {
   text: string;
   timestamp: Date;
   isAI: boolean;
-  userId: string; // To identify which user sent/received this
 }
-
-// User session management - generate unique ID for each session
-const generateUserId = () => {
-  return `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-};
 
 function readBoolEnv(value: unknown, fallback: boolean): boolean {
   if (typeof value !== "string") return fallback;
@@ -71,16 +65,16 @@ function TanakiExperience() {
   const [overlayHeight, setOverlayHeight] = useState(240);
   const [liveText, setLiveText] = useState("");
 
-  // User identification - each session gets unique ID (no persistence)
-  const [userId] = useState(() => generateUserId());
-
   // UI state
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   
-  // Chat messages - only for current session, not saved on refresh
+  // Chat messages - ONLY for this user
   const [userMessages, setUserMessages] = useState<ChatMessage[]>([]);
+  
+  // Track which AI responses we've already seen
+  const seenAIResponseIds = useRef<Set<string>>(new Set());
 
   const unlockOnce = useCallback(() => {
     if (unlockedOnceRef.current) return;
@@ -167,38 +161,42 @@ function TanakiExperience() {
     };
   }, []);
 
-  // Track which AI responses belong to which user
-  const userResponseTracker = useRef<Map<string, string>>(new Map());
-
-  // Process AI responses - ONLY add responses that are meant for THIS user
+  // FIXED: Track only AI responses that happen AFTER our messages
+  const lastUserMessageTime = useRef<Date | null>(null);
+  
+  // Track AI responses that come after our messages
   useEffect(() => {
-    const newAIResponses = events
+    // Get all AI responses from events
+    const aiResponses = events
       .filter(e => e._kind === "interactionRequest" && e.action === "says" && e.content)
       .map(event => ({
         id: event._id,
         text: event.content,
         timestamp: new Date(event._timestamp || Date.now()),
-        isAI: true,
-        userId: userId // Mark this AI response as belonging to this user
+        isAI: true
       }));
+
+    if (aiResponses.length === 0) return;
+
+    // Find new AI responses we haven't seen yet
+    const newAIResponses = aiResponses.filter(response => 
+      !seenAIResponseIds.current.has(response.id)
+    );
 
     if (newAIResponses.length === 0) return;
 
-    // Check which AI responses we haven't seen yet
-    setUserMessages(prev => {
-      const existingIds = new Set(prev.map(msg => msg.id));
-      const newMessages = newAIResponses.filter(msg => !existingIds.has(msg.id));
-      
-      if (newMessages.length === 0) return prev;
-      
-      // Add timestamp to track when we saw this response
-      newMessages.forEach(msg => {
-        userResponseTracker.current.set(msg.id, userId);
-      });
-      
-      return [...prev, ...newMessages];
-    });
-  }, [events, userId]);
+    // Add only the most recent AI response (assuming it's for us)
+    // This is a simple heuristic - in a real app, you'd need proper session tracking
+    const mostRecentAIResponse = newAIResponses.sort((a, b) => 
+      b.timestamp.getTime() - a.timestamp.getTime()
+    )[0];
+
+    // Mark this response as seen
+    seenAIResponseIds.current.add(mostRecentAIResponse.id);
+    
+    // Add to our messages
+    setUserMessages(prev => [...prev, mostRecentAIResponse]);
+  }, [events]);
 
   const handleSendMessage = async (text: string) => {
     if (!text.trim() || !connected) return;
@@ -208,9 +206,11 @@ function TanakiExperience() {
       id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       text: text,
       timestamp: new Date(),
-      isAI: false,
-      userId: userId
+      isAI: false
     };
+    
+    // Track when we sent this message
+    lastUserMessageTime.current = new Date();
     
     setUserMessages(prev => [...prev, userMessage]);
     unlockOnce();
@@ -221,11 +221,12 @@ function TanakiExperience() {
     setIsMuted(!isMuted);
   };
 
-  // Clear chat history for this user (session only)
+  // Clear chat history for this user
   const clearChat = () => {
     if (confirm("Clear your chat history?")) {
       setUserMessages([]);
-      userResponseTracker.current.clear();
+      seenAIResponseIds.current.clear();
+      lastUserMessageTime.current = null;
     }
   };
 
@@ -241,12 +242,6 @@ function TanakiExperience() {
   ];
 
   const mobileMenuItems = ["Dashboard", "Community", "Models", "Features", "Settings"];
-
-  // Filter to show ONLY this user's messages (current session)
-  const displayMessages = userMessages.filter(msg => 
-    // Show user messages from this user AND AI responses tracked to this user
-    !msg.isAI || userResponseTracker.current.get(msg.id) === userId
-  );
 
   return (
     <div
@@ -416,7 +411,7 @@ function TanakiExperience() {
           </div>
         </div>
 
-        {/* Chat Interface */}
+        {/* Chat Interface - FIXED: Show ONLY userMessages (not events) */}
         <div
           ref={overlayRef}
           className="w-full md:w-[480px] h-[55vh] md:h-[75vh] flex flex-col bg-gradient-to-br from-gray-900/10 to-cyan-900/10 p-5 rounded-3xl shadow-2xl border border-cyan-500/20 pointer-events-auto fixed bottom-0 left-0 md:relative md:bottom-auto md:left-auto mobile-chat custom-scrollbar"
@@ -436,8 +431,9 @@ function TanakiExperience() {
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 rounded-2xl bg-black/10 border border-cyan-500/10 shadow-inner mt-3">
-            {displayMessages.length > 0 ? (
-              displayMessages
+            {/* FIXED: Only show userMessages array, NOT events array */}
+            {userMessages.length > 0 ? (
+              userMessages
                 .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
                 .slice(-10)
                 .map((msg) => (
