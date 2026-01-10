@@ -53,8 +53,6 @@ FROM deps AS builder
 # Copy FULL repo (includes .gitattributes + LFS pointers)
 COPY . .
 
-# ✅ Pull REAL GLB binaries (CRITICAL)
-RUN git lfs pull
 
 # Generate prisma client
 WORKDIR /app/opensouls/packages/soul-engine-cloud
