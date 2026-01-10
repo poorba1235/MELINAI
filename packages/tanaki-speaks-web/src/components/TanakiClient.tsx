@@ -15,6 +15,20 @@ import { Tanaki3DExperience } from "./3d/Tanaki3DExperience";
 // Import icons
 import { Cpu, Home, Menu, Settings, Users, Zap } from "lucide-react";
 
+// Add interface for chat messages
+interface ChatMessage {
+  id: string;
+  text: string;
+  timestamp: Date;
+  isAI: boolean;
+  userId: string; // To identify which user sent/received this
+}
+
+// User session management - generate unique ID for each session
+const generateUserId = () => {
+  return `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+};
+
 function readBoolEnv(value: unknown, fallback: boolean): boolean {
   if (typeof value !== "string") return fallback;
   if (value === "true") return true;
@@ -26,7 +40,6 @@ export default function TanakiClient() {
   const organization = "local";
   const local = readBoolEnv(import.meta.env.VITE_SOUL_ENGINE_LOCAL, false);
 
-  // EXACT WebSocket URL from working code
   const getWebSocketUrl =
     typeof window === "undefined"
       ? undefined
@@ -48,7 +61,6 @@ export default function TanakiClient() {
 }
 
 function TanakiExperience() {
-  // EXACTLY same as working code
   const { connected, events, send, connectedUsers, soul } = useTanakiSoul();
   const audioRef = useRef<TanakiAudioHandle | null>(null);
   const lastSpokenIdRef = useRef<string | null>(null);
@@ -59,11 +71,16 @@ function TanakiExperience() {
   const [overlayHeight, setOverlayHeight] = useState(240);
   const [liveText, setLiveText] = useState("");
 
-  // UI state for your design
+  // User identification - each session gets unique ID (no persistence)
+  const [userId] = useState(() => generateUserId());
+
+  // UI state
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
-  const [userMessages, setUserMessages] = useState<{id: string, text: string, timestamp: Date}[]>([]);
+  
+  // Chat messages - only for current session, not saved on refresh
+  const [userMessages, setUserMessages] = useState<ChatMessage[]>([]);
 
   const unlockOnce = useCallback(() => {
     if (unlockedOnceRef.current) return;
@@ -71,7 +88,7 @@ function TanakiExperience() {
     void audioRef.current?.unlock();
   }, []);
 
-  // When Tanaki says something new, update aria-live text - EXACT from working code
+  // When Tanaki says something new, update aria-live text
   useEffect(() => {
     const latest = [...events]
       .reverse()
@@ -82,7 +99,7 @@ function TanakiExperience() {
     setLiveText(latest.content);
   }, [events.length, events[events.length - 1]?.content]);
 
-  // Listen for Soul Engine ephemeral audio events (useTTS) - EXACT from working code
+  // Listen for Soul Engine ephemeral audio events
   useEffect(() => {
     const onChunk = (evt: any) => {
       const data = evt?.data as any;
@@ -92,7 +109,6 @@ function TanakiExperience() {
       const chunkBase64 = typeof data.chunkBase64 === "string" ? data.chunkBase64 : null;
       if (!streamId || !chunkBase64) return;
 
-      // If a new stream starts, interrupt queued audio so it feels responsive.
       if (activeTtsStreamIdRef.current !== streamId) {
         activeTtsStreamIdRef.current = streamId;
         audioRef.current?.interrupt();
@@ -131,7 +147,7 @@ function TanakiExperience() {
     };
   }, [soul]);
 
-  // Measure the bottom overlay - EXACT from working code
+  // Measure the bottom overlay
   useEffect(() => {
     const el = overlayRef.current;
     if (!el) return;
@@ -151,25 +167,66 @@ function TanakiExperience() {
     };
   }, []);
 
-  // Simple send function - EXACT from working code
-const handleSendMessage = async (text: string) => {
-  if (!text.trim() || !connected) return;
-  
-  // Add user message to UI immediately
-  const userMessage = {
-    id: `user_${Date.now()}`,
-    text: text,
-    timestamp: new Date()
-  };
-  setUserMessages(prev => [...prev, userMessage]);
-  
-  unlockOnce();
-  await send(text);
-};
+  // Track which AI responses belong to which user
+  const userResponseTracker = useRef<Map<string, string>>(new Map());
 
+  // Process AI responses - ONLY add responses that are meant for THIS user
+  useEffect(() => {
+    const newAIResponses = events
+      .filter(e => e._kind === "interactionRequest" && e.action === "says" && e.content)
+      .map(event => ({
+        id: event._id,
+        text: event.content,
+        timestamp: new Date(event._timestamp || Date.now()),
+        isAI: true,
+        userId: userId // Mark this AI response as belonging to this user
+      }));
+
+    if (newAIResponses.length === 0) return;
+
+    // Check which AI responses we haven't seen yet
+    setUserMessages(prev => {
+      const existingIds = new Set(prev.map(msg => msg.id));
+      const newMessages = newAIResponses.filter(msg => !existingIds.has(msg.id));
+      
+      if (newMessages.length === 0) return prev;
+      
+      // Add timestamp to track when we saw this response
+      newMessages.forEach(msg => {
+        userResponseTracker.current.set(msg.id, userId);
+      });
+      
+      return [...prev, ...newMessages];
+    });
+  }, [events, userId]);
+
+  const handleSendMessage = async (text: string) => {
+    if (!text.trim() || !connected) return;
+    
+    // Add user message to UI
+    const userMessage: ChatMessage = {
+      id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      text: text,
+      timestamp: new Date(),
+      isAI: false,
+      userId: userId
+    };
+    
+    setUserMessages(prev => [...prev, userMessage]);
+    unlockOnce();
+    await send(text);
+  };
 
   const toggleMute = () => {
     setIsMuted(!isMuted);
+  };
+
+  // Clear chat history for this user (session only)
+  const clearChat = () => {
+    if (confirm("Clear your chat history?")) {
+      setUserMessages([]);
+      userResponseTracker.current.clear();
+    }
   };
 
   // Model loading
@@ -184,6 +241,12 @@ const handleSendMessage = async (text: string) => {
   ];
 
   const mobileMenuItems = ["Dashboard", "Community", "Models", "Features", "Settings"];
+
+  // Filter to show ONLY this user's messages (current session)
+  const displayMessages = userMessages.filter(msg => 
+    // Show user messages from this user AND AI responses tracked to this user
+    !msg.isAI || userResponseTracker.current.get(msg.id) === userId
+  );
 
   return (
     <div
@@ -204,7 +267,7 @@ const handleSendMessage = async (text: string) => {
         chat={() => console.log("Chat triggered")}
       />
       
-      {/* 🔊 Audio Component - EXACT from working code */}
+      {/* 🔊 Audio Component */}
       <TanakiAudio
         ref={audioRef}
         enabled={!isMuted}
@@ -252,6 +315,16 @@ const handleSendMessage = async (text: string) => {
             </div>
 
             <div className="flex items-center gap-4">
+              {/* Clear Chat Button */}
+              <button
+                onClick={clearChat}
+                className="hidden md:flex items-center gap-2 px-3 py-2 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 hover:text-cyan-100 transition-all duration-300 text-sm font-medium"
+                style={{ fontFamily: "'Rajdhani', sans-serif" }}
+                title="Clear your chat history"
+              >
+                🗑️ Clear Chat
+              </button>
+
               {/* Social Links */}
               <div className="hidden md:flex items-center gap-3">
                 <a
@@ -294,6 +367,13 @@ const handleSendMessage = async (text: string) => {
                     </a>
                   ))}
                   <div className="border-t border-cyan-500/20 pt-3 mt-2">
+                    <button
+                      onClick={clearChat}
+                      className="w-full text-cyan-200 hover:text-cyan-100 p-3 rounded-lg hover:bg-cyan-500/10 transition-all duration-200 text-center font-medium"
+                      style={{ fontFamily: "'Rajdhani', sans-serif" }}
+                    >
+                      🗑️ Clear Chat
+                    </button>
                     <a
                       href="#"
                       className="text-cyan-200 hover:text-cyan-100 p-3 rounded-lg hover:bg-cyan-500/10 transition-all duration-200 text-center font-medium block"
@@ -337,89 +417,84 @@ const handleSendMessage = async (text: string) => {
         </div>
 
         {/* Chat Interface */}
- <div
-        ref={overlayRef}
-        className="w-full md:w-[480px] h-[55vh] md:h-[75vh] flex flex-col bg-gradient-to-br from-gray-900/10 to-cyan-900/10 p-5 rounded-3xl shadow-2xl border border-cyan-500/20 pointer-events-auto fixed bottom-0 left-0 md:relative md:bottom-auto md:left-auto mobile-chat"
-        style={{ pointerEvents: "auto" as const }}
-      >
-        <div className="flex items-center justify-between p-4 rounded-2xl bg-gradient-to-r from-cyan-500/10 to-purple-500/10 border border-cyan-500/20 shadow-inner">
-          <div className="flex items-center gap-3">
-            <div className="w-3 h-3 bg-cyan-400 rounded-full animate-pulse"></div>
-            <span className="text-cyan-300 font-bold text-lg tracking-wide" style={{ fontFamily: "'Orbitron', sans-serif" }}>
-              NEURAL_CHAT
-            </span>
-          </div>
-          <div className="flex items-center gap-2 text-cyan-200/70 text-sm">
-            <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-            <span style={{ fontFamily: "'Rajdhani', sans-serif" }}>SYSTEM ACTIVE</span>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 rounded-2xl bg-black/10 border border-cyan-500/10 shadow-inner mt-3">
-          {[...userMessages, ...events
-            .filter(e => e._kind === "interactionRequest" && e.action === "says" && e.content)
-            .map(event => ({
-              id: event._id,
-              text: event.content,
-              timestamp: new Date(event._timestamp || Date.now()),
-              isAI: true
-            }))]
-            .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
-            .slice(-10) // Show last 10 messages total
-            .map((msg) => (
-              <div 
-                key={msg.id}
-                className={`mb-3 p-3 rounded-xl ${
-                  msg.isAI 
-                    ? "bg-purple-500/10 border border-purple-500/30 ml-8" 
-                    : "bg-cyan-500/10 border border-cyan-500/30 mr-8"
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  <div className={`w-2 h-2 rounded-full ${
-                    msg.isAI ? "bg-purple-400" : "bg-cyan-400"
-                  }`}></div>
-                  <strong className={`text-sm ${
-                    msg.isAI ? "text-purple-300" : "text-cyan-300"
-                  }`}>
-                    {msg.isAI ? "MEILIN" : "YOU"}
-                  </strong>
-                  {!msg.isAI && (
-                    <div className="flex items-center gap-1 bg-cyan-500/20 px-2 py-1 rounded-full">
-                      <span className="text-xs text-cyan-300 font-medium">LIVE</span>
-                      <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-pulse"></div>
-                    </div>
-                  )}
-                </div>
-                <div className={`text-sm ${
-                  msg.isAI ? "text-purple-100" : "text-cyan-100"
-                }`}>
-                  {msg.text}
-                </div>
-              </div>
-            ))}
-          
-          {userMessages.length === 0 && 
-           events.filter(e => e._kind === "interactionRequest" && e.action === "says").length === 0 && (
-            <div className="text-center py-8 text-cyan-300/50">
-              <div className="text-lg mb-2">Start a conversation with MEILIN</div>
-              <div className="text-sm">Ask anything and get AI-powered responses</div>
+        <div
+          ref={overlayRef}
+          className="w-full md:w-[480px] h-[55vh] md:h-[75vh] flex flex-col bg-gradient-to-br from-gray-900/10 to-cyan-900/10 p-5 rounded-3xl shadow-2xl border border-cyan-500/20 pointer-events-auto fixed bottom-0 left-0 md:relative md:bottom-auto md:left-auto mobile-chat custom-scrollbar"
+          style={{ pointerEvents: "auto" as const }}
+        >
+          <div className="flex items-center justify-between p-4 rounded-2xl bg-gradient-to-r from-cyan-500/10 to-purple-500/10 border border-cyan-500/20 shadow-inner">
+            <div className="flex items-center gap-3">
+              <div className="w-3 h-3 bg-cyan-400 rounded-full animate-pulse"></div>
+              <span className="text-cyan-300 font-bold text-lg tracking-wide" style={{ fontFamily: "'Orbitron', sans-serif" }}>
+                NEURAL_CHAT
+              </span>
             </div>
-          )}
-        </div>
+            <div className="flex items-center gap-2 text-cyan-200/70 text-sm">
+              <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+              <span style={{ fontFamily: "'Rajdhani', sans-serif" }}>SYSTEM ACTIVE</span>
+            </div>
+          </div>
 
-        {/* Chat Input */}
-        <div className="mt-4">
-          <ChatInput
-            disabled={!connected}
-            onUserGesture={unlockOnce}
-            isRecording={isRecording}
-            onVoiceClick={() => setIsRecording(!isRecording)}
-            onSend={handleSendMessage} // Use the updated function
-            placeholder="Type your message..."
-          />
+          <div className="flex-1 overflow-y-auto p-4 rounded-2xl bg-black/10 border border-cyan-500/10 shadow-inner mt-3">
+            {displayMessages.length > 0 ? (
+              displayMessages
+                .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+                .slice(-10)
+                .map((msg) => (
+                  <div 
+                    key={msg.id}
+                    className={`mb-3 p-3 rounded-xl ${
+                      msg.isAI 
+                        ? "bg-purple-500/10 border border-purple-500/30 ml-8" 
+                        : "bg-cyan-500/10 border border-cyan-500/30 mr-8"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className={`w-2 h-2 rounded-full ${
+                        msg.isAI ? "bg-purple-400" : "bg-cyan-400"
+                      }`}></div>
+                      <strong className={`text-sm ${
+                        msg.isAI ? "text-purple-300" : "text-cyan-300"
+                      }`}>
+                        {msg.isAI ? "MEILIN" : "YOU"}
+                      </strong>
+                      {!msg.isAI && (
+                        <div className="flex items-center gap-1 bg-cyan-500/20 px-2 py-1 rounded-full">
+                          <span className="text-xs text-cyan-300 font-medium">YOU</span>
+                          <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-pulse"></div>
+                        </div>
+                      )}
+                    </div>
+                    <div className={`text-sm ${
+                      msg.isAI ? "text-purple-100" : "text-cyan-100"
+                    }`}>
+                      {msg.text}
+                    </div>
+                    <div className="text-xs mt-1 opacity-50">
+                      {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  </div>
+                ))
+            ) : (
+              <div className="text-center py-8 text-cyan-300/50">
+                <div className="text-lg mb-2">Start a conversation with MEILIN</div>
+                <div className="text-sm">Ask anything and get AI-powered responses</div>
+              </div>
+            )}
+          </div>
+
+          {/* Chat Input */}
+          <div className="mt-4">
+            <ChatInput
+              disabled={!connected}
+              onUserGesture={unlockOnce}
+              isRecording={isRecording}
+              onVoiceClick={() => setIsRecording(!isRecording)}
+              onSend={handleSendMessage}
+              placeholder="Type your message..."
+            />
+          </div>
         </div>
-      </div>
 
         {/* Mute Button */}
         <button
@@ -445,24 +520,6 @@ const handleSendMessage = async (text: string) => {
               border-radius: 20px !important;
             }
           }
-          
-          ::-webkit-scrollbar {
-            width: 6px;
-          }
-          
-          ::-webkit-scrollbar-track {
-            background: rgba(6, 182, 212, 0.1);
-            border-radius: 10px;
-          }
-          
-          ::-webkit-scrollbar-thumb {
-            background: rgba(6, 182, 212, 0.4);
-            border-radius: 10px;
-          }
-          
-          ::-webkit-scrollbar-thumb:hover {
-            background: rgba(6, 182, 212, 0.6);
-          }
         `}</style>
 
         <style jsx global>{`
@@ -470,6 +527,52 @@ const handleSendMessage = async (text: string) => {
           
           .hover\\:drop-shadow-glow:hover {
             filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.6));
+          }
+          
+          /* Custom Thin Scrollbar with bg-cyan-400 */
+          .custom-scrollbar::-webkit-scrollbar {
+            width: 2px;
+          }
+          
+          .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(6, 182, 212, 0.05);
+            border-radius: 2px;
+          }
+          
+          .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgb(34, 211, 238);
+            border-radius: 2px;
+          }
+          
+          .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgb(22, 196, 223);
+            width: 3px;
+          }
+          
+          /* For Firefox */
+          .custom-scrollbar {
+            scrollbar-width: thin;
+            scrollbar-color: rgb(34, 211, 238) rgba(6, 182, 212, 0.05);
+          }
+          
+          /* Apply to chat message container specifically */
+          .custom-scrollbar > div:first-of-type + div {
+            scrollbar-width: thin;
+            scrollbar-color: rgb(34, 211, 238) rgba(6, 182, 212, 0.05);
+          }
+          
+          .custom-scrollbar > div:first-of-type + div::-webkit-scrollbar {
+            width: 2px;
+          }
+          
+          .custom-scrollbar > div:first-of-type + div::-webkit-scrollbar-track {
+            background: rgba(6, 182, 212, 0.05);
+            border-radius: 2px;
+          }
+          
+          .custom-scrollbar > div:first-of-type + div::-webkit-scrollbar-thumb {
+            background: rgb(34, 211, 238);
+            border-radius: 2px;
           }
         `}</style>
       </div>
@@ -490,7 +593,6 @@ function ModelLoadingOverlay({ active, progress }: ModelLoadingOverlayProps) {
   const [simulatedProgress, setSimulatedProgress] = useState(0);
   const simulationRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // EXACT same simulation logic as working code
   useEffect(() => {
     if (!active) {
       setSimulatedProgress(0);
@@ -501,10 +603,8 @@ function ModelLoadingOverlay({ active, progress }: ModelLoadingOverlayProps) {
       return;
     }
 
-    // Simulate progress with diminishing returns (never quite reaches 100)
     simulationRef.current = setInterval(() => {
       setSimulatedProgress((prev) => {
-        // Logarithmic approach: fast at start, slows as it nears ~90%
         const remaining = 90 - prev;
         if (remaining <= 0) return prev;
         return prev + remaining * 0.08;
@@ -519,7 +619,6 @@ function ModelLoadingOverlay({ active, progress }: ModelLoadingOverlayProps) {
     };
   }, [active]);
 
-  // Show while any three loader is active, but especially helpful for the big GLB.
   if (!active || progress >= 100) return null;
 
   const pct = Math.max(0, Math.min(100, Math.round(simulatedProgress)));
