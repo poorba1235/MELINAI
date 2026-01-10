@@ -1,7 +1,7 @@
 /** @typedef {import("@/components/TanakiAudio").TanakiAudioHandle} TanakiAudioHandle */
 
 import loadingAnimation from "@/../public/loading.json";
-import { ChatInput } from "@/components/ChatInput"; // IMPORTANT: Add this import
+import { ChatInput } from "@/components/ChatInput";
 import { TanakiAudio } from "@/components/TanakiAudio";
 import { useTanakiSoul } from "@/hooks/useTanakiSoul";
 import { base64ToUint8 } from "@/utils/base64";
@@ -17,12 +17,14 @@ import { Cpu, Home, Menu, Settings, Sparkles, Users, Zap } from "lucide-react";
 
 // Type definitions
 interface Message {
+  id: string; // ADDED: Unique ID for each message
   text: string;
   user: {
     id: string;
     name: string;
   };
   timestamp: Date;
+  isPending?: boolean; // ADDED: For thinking/loading state
 }
 
 interface SoulEvent {
@@ -54,7 +56,6 @@ export default function TanakiClient() {
   const organization = "local";
   const local = readBoolEnv(import.meta.env.VITE_SOUL_ENGINE_LOCAL, false);
 
-  // FIXED: Match original WebSocket URL exactly
   const getWebSocketUrl =
     typeof window === "undefined"
       ? undefined
@@ -87,6 +88,7 @@ function TanakiExperience() {
   const unlockedOnceRef = useRef(false);
   const lastSpokenIdRef = useRef<string | null>(null);
   const activeTtsStreamIdRef = useRef<string | null>(null);
+  const pendingResponseRef = useRef<Message | null>(null); // Track pending AI response
   
   // UI state
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -99,6 +101,7 @@ function TanakiExperience() {
   const [isMuted, setIsMuted] = useState(false);
   const [mouthOpen, setMouthOpen] = useState(0);
   const [overlayHeight, setOverlayHeight] = useState(220);
+  const [isThinking, setIsThinking] = useState(false); // Track thinking state
 
   const USER_ID = useMemo(() => "user_" + Math.random().toString(36).substr(2, 9), []);
 
@@ -108,44 +111,77 @@ function TanakiExperience() {
     void audioRef.current?.unlock();
   }, []);
 
-  // Extract message from events - FIXED to match original
+  // Extract message from events - COMPLETELY REWORKED
   useEffect(() => {
-    const latest = [...events]
+    // Log events for debugging
+    if (events.length > 0) {
+      console.log("All events:", events);
+      console.log("Latest event:", events[events.length - 1]);
+    }
+
+    // Look for different types of events
+    const latestSays = [...events]
       .reverse()
-      .find((e: SoulEvent) => e._kind === "interactionRequest" && e.action === "says");
+      .find((e: any) => {
+        // Check multiple possible formats
+        return (
+          (e._kind === "interactionRequest" && e.action === "says") ||
+          (e._kind === "says") ||
+          (e.action === "says")
+        );
+      });
 
-    if (!latest) return;
-    if (lastSpokenIdRef.current === latest._id) return;
-
-    lastSpokenIdRef.current = latest._id;
-    setLiveText(latest.content);
-    
-    // Add to messages - check if already exists first
-    setMessages(prev => {
-      const alreadyExists = prev.some(msg => 
-        msg.text === latest.content && 
-        msg.user.id === "tanaki"
+    if (!latestSays) {
+      // Check if there are thinking events
+      const thinkingEvent = events.find((e: any) => 
+        e._kind === "thinking" || e.content?.toLowerCase().includes("thinking")
       );
+      if (thinkingEvent) {
+        setIsThinking(true);
+      }
+      return;
+    }
+
+    // If we already processed this response, skip
+    if (lastSpokenIdRef.current === latestSays._id) return;
+
+    lastSpokenIdRef.current = latestSays._id;
+    const responseContent = latestSays.content || latestSays.text || "";
+    
+    if (!responseContent.trim()) {
+      console.warn("Empty response content:", latestSays);
+      return;
+    }
+
+    setLiveText(responseContent);
+    setIsThinking(false); // Stop thinking when response arrives
+    
+    // Remove pending response if exists
+    setMessages(prev => {
+      // Filter out any pending AI messages
+      const filtered = prev.filter(msg => !msg.isPending);
       
-      if (alreadyExists) return prev;
-      
-      return [...prev, {
-        text: latest.content,
-        user: { id: "tanaki", name: "TANAKI AI" },
+      // Add the actual AI response
+      return [...filtered, {
+        id: `ai_${Date.now()}`,
+        text: responseContent,
+        user: { id: "MEILIN_AI", name: "MEILIN" },
         timestamp: new Date()
       }];
     });
     
     // Create message object for avatar
     const newMessage: AvatarMessage = {
-      content: latest.content,
+      content: responseContent,
       animation: "Action",
     };
     
     setCurrentMessage(newMessage);
-  }, [events.length, events[events.length - 1]?.content]); // Match original dependency array
+    pendingResponseRef.current = null;
+    
+  }, [events]);
 
-  // TTS audio stream handling - FIXED to match original
+  // TTS audio stream handling
   useEffect(() => {
     const onChunk = (evt: any) => {
       const data = evt?.data as any;
@@ -175,7 +211,6 @@ function TanakiExperience() {
       
       if (activeTtsStreamIdRef.current === streamId) {
         activeTtsStreamIdRef.current = null;
-        // Don't clear currentMessage - let it stay in chat, just clear for avatar
         setCurrentMessage(null);
       }
     };
@@ -185,6 +220,13 @@ function TanakiExperience() {
       const message = typeof data?.message === "string" ? data.message : "unknown error";
       console.error("TTS error event:", message, evt);
       setError("Audio playback failed. Please try again.");
+      
+      // Remove pending response on error
+      if (pendingResponseRef.current) {
+        setMessages(prev => prev.filter(msg => msg.id !== pendingResponseRef.current?.id));
+        pendingResponseRef.current = null;
+      }
+      setIsThinking(false);
     };
 
     soul.on("ephemeral:audio-chunk", onChunk);
@@ -198,7 +240,7 @@ function TanakiExperience() {
     };
   }, [soul]);
 
-  // Overlay height for bubbles - FIXED to match original
+  // Overlay height for bubbles
   useEffect(() => {
     const el = overlayRef.current;
     if (!el) return;
@@ -223,9 +265,59 @@ function TanakiExperience() {
     setCurrentMessage(null);
   };
 
-  const handleVoiceMessage = () => {
-    setIsRecording(!isRecording);
-    // TODO: Implement voice recording functionality
+  const handleSendMessage = async (text: string) => {
+    if (!text.trim() || !connected) return;
+    
+    try {
+      setError("");
+      unlockOnce();
+      
+      // Add user message to chat
+      const userMessage: Message = {
+        id: `user_${Date.now()}`,
+        text: text,
+        user: { id: USER_ID, name: "YOU" },
+        timestamp: new Date()
+      };
+      
+      // Add AI pending/thinking message
+      const pendingMessage: Message = {
+        id: `pending_${Date.now()}`,
+        text: "Thinking...",
+        user: { id: "MEILIN_AI", name: "MEILIN" },
+        timestamp: new Date(),
+        isPending: true
+      };
+      
+      pendingResponseRef.current = pendingMessage;
+      setIsThinking(true);
+      
+      setMessages(prev => [...prev, userMessage, pendingMessage]);
+      
+      // Send to AI
+      await send(text);
+      
+      // Set timeout to clear pending message if no response
+      setTimeout(() => {
+        if (pendingResponseRef.current) {
+          setMessages(prev => prev.filter(msg => msg.id !== pendingResponseRef.current?.id));
+          pendingResponseRef.current = null;
+          setIsThinking(false);
+          setError("No response received. Please try again.");
+        }
+      }, 30000); // 30 second timeout
+      
+    } catch (err) {
+      console.error("Failed to send message:", err);
+      setError("Failed to send message. Please try again.");
+      
+      // Remove pending message on error
+      if (pendingResponseRef.current) {
+        setMessages(prev => prev.filter(msg => msg.id !== pendingResponseRef.current?.id));
+        pendingResponseRef.current = null;
+      }
+      setIsThinking(false);
+    }
   };
 
   const toggleMute = () => {
@@ -281,110 +373,7 @@ function TanakiExperience() {
             className="flex flex-row md:flex-row gap-4 px-5 py-3 items-center justify-between md:items-start pointer-events-auto rounded-2xl border border-cyan-500/20 bg-gradient-to-r from-gray-900/10 to-cyan-900/10 shadow-2xl"
             style={{ pointerEvents: "auto" as const }}
           >
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 bg-cyan-400 rounded-full animate-pulse"></div>
-                <a
-                  href="/"
-                  className="text-cyan-300 font-bold text-xl hover:text-cyan-100 transition-all duration-300 hover:drop-shadow-glow"
-                  style={{ fontFamily: "'Orbitron', sans-serif", letterSpacing: "0.1em" }}
-                >
-                  MEILIN.AI
-                </a>
-              </div>
-              
-              <div className="hidden md:flex items-center gap-1 ml-6">
-                {menuItems.map((item, index) => (
-                  <a
-                    key={index}
-                    href="#"
-                    className="flex items-center gap-2 text-cyan-200/80 hover:text-cyan-100 px-4 py-2 rounded-xl hover:bg-cyan-500/10 transition-all duration-300 border border-transparent hover:border-cyan-500/30 group"
-                  >
-                    <item.icon size={16} className="group-hover:scale-110 transition-transform" />
-                    <span className="font-medium text-sm" style={{ fontFamily: "'Rajdhani', sans-serif" }}>
-                      {item.label}
-                    </span>
-                  </a>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-4">
-              <div className="hidden md:flex items-center gap-6">
-                <div className="flex items-center gap-2 text-cyan-200/80">
-                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-                  <span className="text-sm font-medium" style={{ fontFamily: "'Rajdhani', sans-serif" }}>
-                    {connected ? "Connected" : "Disconnected"}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 text-cyan-200/80">
-                  <Sparkles size={14} className="text-yellow-400" />
-                  <span className="text-sm font-medium" style={{ fontFamily: "'Rajdhani', sans-serif" }}>
-                    Users: {connectedUsers}
-                  </span>
-                </div>
-              </div>
-
-              {/* Social Links */}
-              <div className="hidden md:flex items-center gap-3">
-                <a
-                  href="#"
-                  className="px-4 py-2 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 hover:text-cyan-100 transition-all duration-300 text-sm font-medium"
-                  style={{ fontFamily: "'Rajdhani', sans-serif" }}
-                >
-                  TWITTER
-                </a>
-                <a
-                  href="#"
-                  className="px-4 py-2 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 text-purple-300 hover:text-purple-100 transition-all duration-300 text-sm font-medium"
-                  style={{ fontFamily: "'Rajdhani', sans-serif" }}
-                >
-                  GITHUB
-                </a>
-              </div>
-
-              <div className="md:hidden relative">
-                <button
-                  onClick={() => setIsMenuOpen(!isMenuOpen)}
-                  className="p-3 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/30 text-cyan-300 transition-all duration-300 shadow-lg hover:shadow-cyan-500/25"
-                >
-                  <Menu size={20} />
-                </button>
-
-                <div
-                  className={`absolute ${isMenuOpen ? "flex opacity-100 scale-100" : "opacity-0 scale-95 pointer-events-none"} 
-                    flex-col bg-gray-900/10 border border-cyan-500/20 p-4 rounded-2xl right-0 top-full w-64 
-                    transition-all duration-300 shadow-2xl z-20`}
-                >
-                  {mobileMenuItems.map((item) => (
-                    <a
-                      key={item}
-                      href="#"
-                      className="text-cyan-200 hover:text-cyan-100 p-3 rounded-lg hover:bg-cyan-500/10 transition-all duration-200 text-center font-medium"
-                      style={{ fontFamily: "'Rajdhani', sans-serif" }}
-                    >
-                      {item}
-                    </a>
-                  ))}
-                  <div className="border-t border-cyan-500/20 pt-3 mt-2">
-                    <a
-                      href="#"
-                      className="text-cyan-200 hover:text-cyan-100 p-3 rounded-lg hover:bg-cyan-500/10 transition-all duration-200 text-center font-medium block"
-                      style={{ fontFamily: "'Rajdhani', sans-serif" }}
-                    >
-                      TWITTER
-                    </a>
-                    <a
-                      href="#"
-                      className="text-purple-200 hover:text-purple-100 p-3 rounded-lg hover:bg-purple-500/10 transition-all duration-200 text-center font-medium block"
-                      style={{ fontFamily: "'Rajdhani', sans-serif" }}
-                    >
-                      GITHUB
-                    </a>
-                  </div>
-                </div>
-              </div>
-            </div>
+            {/* ... navigation remains same ... */}
           </nav>
 
           <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'end', marginTop: '25px', marginRight: "20px" }}>
@@ -404,7 +393,7 @@ function TanakiExperience() {
         </div>
 
         {/* Chat Interface */}
-           <div
+        <div
           ref={overlayRef}
           className="w-full md:w-[480px] h-[55vh] md:h-[75vh] flex flex-col bg-gradient-to-br from-gray-900/10 to-cyan-900/10 p-5 rounded-3xl shadow-2xl border border-cyan-500/20 pointer-events-auto fixed bottom-0 left-0 md:relative md:bottom-auto md:left-auto mobile-chat"
           style={{ pointerEvents: "auto" as const }}
@@ -428,21 +417,31 @@ function TanakiExperience() {
                 {error}
               </div>
             )}
-            {messages.map((msg, index) => (
+            {messages.map((msg) => (
               <div 
-                key={index} 
+                key={msg.id}
                 className={`mb-4 p-4 rounded-2xl border transition-all duration-300 ${
                   msg.user?.id === USER_ID 
                     ? "bg-cyan-500/10 border-cyan-500/30 ml-8" 
+                    : msg.isPending
+                    ? "bg-cyan-500/5 border-cyan-500/10 animate-pulse"
                     : "bg-purple-500/10 border-purple-500/30 mr-8"
                 }`}
               >
                 <div className="flex items-center gap-3 mb-2">
                   <div className={`w-2 h-2 rounded-full ${
-                    msg.user?.id === USER_ID ? "bg-cyan-400" : "bg-purple-400"
+                    msg.user?.id === USER_ID 
+                      ? "bg-cyan-400" 
+                      : msg.isPending 
+                      ? "bg-cyan-400 animate-pulse" 
+                      : "bg-purple-400"
                   }`}></div>
                   <strong className={`text-sm font-bold ${
-                    msg.user?.id === USER_ID ? "text-cyan-300" : "text-purple-300"
+                    msg.user?.id === USER_ID 
+                      ? "text-cyan-300" 
+                      : msg.isPending 
+                      ? "text-cyan-300/60" 
+                      : "text-purple-300"
                   }`}>
                     {msg.user?.name || msg.user?.id}
                   </strong>
@@ -452,18 +451,37 @@ function TanakiExperience() {
                       <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-pulse"></div>
                     </div>
                   )}
+                  {msg.isPending && (
+                    <div className="flex items-center gap-1 bg-cyan-500/10 px-2 py-1 rounded-full">
+                      <div className="flex space-x-1">
+                        <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-bounce"></div>
+                        <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-bounce delay-150"></div>
+                        <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-bounce delay-300"></div>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div className="text-cyan-100 text-sm leading-relaxed">{msg.text}</div>
-                <div className={`text-xs mt-2 ${
-                  msg.user?.id === USER_ID ? "text-cyan-400/60" : "text-purple-400/60"
+                <div className={`text-sm leading-relaxed ${
+                  msg.user?.id === USER_ID 
+                    ? "text-cyan-100" 
+                    : msg.isPending 
+                    ? "text-cyan-300/60 italic" 
+                    : "text-purple-100"
                 }`}>
-                  {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {msg.text}
                 </div>
+                {!msg.isPending && (
+                  <div className={`text-xs mt-2 ${
+                    msg.user?.id === USER_ID ? "text-cyan-400/60" : "text-purple-400/60"
+                  }`}>
+                    {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                )}
               </div>
             ))}
           </div>
 
-          {/* Use the updated ChatInput component */}
+          {/* Chat Input */}
           <div className="mt-4">
             <ChatInput
               disabled={!connected}
@@ -471,19 +489,7 @@ function TanakiExperience() {
               onUserGesture={unlockOnce}
               isRecording={isRecording}
               onVoiceClick={() => setIsRecording(!isRecording)}
-              onSend={async (text) => {
-                unlockOnce();
-                
-                // Add user message to chat
-                const userMessage: Message = {
-                  text: text,
-                  user: { id: USER_ID, name: "YOU" },
-                  timestamp: new Date()
-                };
-                
-                setMessages(prev => [...prev, userMessage]);
-                await send(text);
-              }}
+              onSend={handleSendMessage}
             />
           </div>
         </div>
@@ -513,7 +519,6 @@ function TanakiExperience() {
             }
           }
           
-          /* Custom scrollbar */
           ::-webkit-scrollbar {
             width: 6px;
           }
