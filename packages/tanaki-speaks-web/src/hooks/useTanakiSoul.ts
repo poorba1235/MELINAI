@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { useSoul } from "@opensouls/react";
 import { said } from "@opensouls/soul";
 import { usePresence } from "./usePresence";
@@ -17,35 +17,35 @@ export type StoreEvent = {
   name?: string;
 };
 
+const useUniqueSoulId = () => {
+  const [soulId] = useState(() => crypto.randomUUID());
+  return soulId;
+};
+
 export function useTanakiSoul() {
+  const soulId = useUniqueSoulId(); // each tab gets its own soul
+
   const organization = "local";
   const local = true;
 
-  // Connect to presence tracking
-  const { connectedUsers: presenceCount, isConnected: presenceConnected } = usePresence({ 
-    enabled: true 
-  });
+  const { connectedUsers: presenceCount, isConnected: presenceConnected } = usePresence({ enabled: true });
 
   const { soul, connected, disconnect, store } = useSoul({
     blueprint: "tanaki-speaks",
-    soulId: SHARED_SOUL_ID,
+    soulId, // unique per tab
     local,
     token: "test",
     debug: true,
   });
 
-  const events = (store?.events ?? []) as unknown as StoreEvent[];
+  const events = [] as StoreEvent[]; // don’t show old events from previous users
 
   const send = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-
-    // Dispatch with connected count in metadata
     await soul.dispatch({
       ...said("User", trimmed),
-      _metadata: {
-        connectedUsers: presenceCount,
-      },
+      _metadata: { connectedUsers: presenceCount },
     });
   }, [soul, presenceCount]);
 

@@ -1,4 +1,5 @@
 /** @typedef {import("@/components/TanakiAudio").TanakiAudioHandle} TanakiAudioHandle */
+
 import loadingAnimation from "@/../public/loading.json";
 import { ChatInput } from "@/components/ChatInput";
 import { TanakiAudio } from "@/components/TanakiAudio";
@@ -8,8 +9,9 @@ import { SoulEngineProvider } from "@opensouls/react";
 import { VisuallyHidden } from "@radix-ui/themes";
 import { useProgress } from "@react-three/drei";
 import Lottie from "lottie-react";
-import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Tanaki3DExperience } from "./3d/Tanaki3DExperience";
+
 // Import icons
 import { Cpu, Home, Menu, Settings, Users, Zap } from "lucide-react";
 
@@ -24,19 +26,15 @@ export default function TanakiClient() {
   const organization = "local";
   const local = readBoolEnv(import.meta.env.VITE_SOUL_ENGINE_LOCAL, false);
 
-  // Add unique session ID per tab/instance to separate WebSocket connections
-  const sessionId = useMemo(() => crypto.randomUUID(), []);
-
-  // EXACT WebSocket URL from working code, with session ID appended
-  const getWebSocketUrl = useCallback(
-    (org: string, _local: boolean, debug: boolean) => {
-      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const channel = debug ? "debug-chat" : "experience";
-      // Append session ID as query param to make each tab's connection unique
-      return `${wsProtocol}//${window.location.host}/ws/soul/${encodeURIComponent(org)}/${channel}?session=${sessionId}`;
-    },
-    [sessionId]
-  );
+  // EXACT WebSocket URL from working code
+  const getWebSocketUrl =
+    typeof window === "undefined"
+      ? undefined
+      : (org: string, _local: boolean, debug: boolean) => {
+          const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+          const channel = debug ? "debug-chat" : "experience";
+          return `${wsProtocol}//${window.location.host}/ws/soul/${encodeURIComponent(org)}/${channel}`;
+        };
 
   return (
     <SoulEngineProvider
@@ -60,6 +58,7 @@ function TanakiExperience() {
   const unlockedOnceRef = useRef(false);
   const [overlayHeight, setOverlayHeight] = useState(240);
   const [liveText, setLiveText] = useState("");
+
   // UI state for your design
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -88,14 +87,17 @@ function TanakiExperience() {
     const onChunk = (evt: any) => {
       const data = evt?.data as any;
       if (!data || typeof data !== "object") return;
+
       const streamId = typeof data.streamId === "string" ? data.streamId : null;
       const chunkBase64 = typeof data.chunkBase64 === "string" ? data.chunkBase64 : null;
       if (!streamId || !chunkBase64) return;
+
       // If a new stream starts, interrupt queued audio so it feels responsive.
       if (activeTtsStreamIdRef.current !== streamId) {
         activeTtsStreamIdRef.current = streamId;
         audioRef.current?.interrupt();
       }
+
       try {
         const bytes = base64ToUint8(chunkBase64);
         audioRef.current?.enqueuePcm16(bytes);
@@ -103,6 +105,7 @@ function TanakiExperience() {
         console.error("Failed to decode/enqueue TTS chunk:", err);
       }
     };
+
     const onComplete = (evt: any) => {
       const data = evt?.data as any;
       const streamId = typeof data?.streamId === "string" ? data.streamId : null;
@@ -111,11 +114,13 @@ function TanakiExperience() {
         activeTtsStreamIdRef.current = null;
       }
     };
+
     const onError = (evt: any) => {
       const data = evt?.data as any;
       const message = typeof data?.message === "string" ? data.message : "unknown error";
       console.error("TTS error event:", message, evt);
     };
+
     soul.on("ephemeral:audio-chunk", onChunk);
     soul.on("ephemeral:audio-complete", onComplete);
     soul.on("ephemeral:audio-error", onError);
@@ -130,10 +135,12 @@ function TanakiExperience() {
   useEffect(() => {
     const el = overlayRef.current;
     if (!el) return;
+
     const update = () => {
       const rect = el.getBoundingClientRect();
       setOverlayHeight(Math.max(120, Math.round(rect.height + 10)));
     };
+
     update();
     const ro = new ResizeObserver(() => update());
     ro.observe(el);
@@ -145,20 +152,21 @@ function TanakiExperience() {
   }, []);
 
   // Simple send function - EXACT from working code
-  const handleSendMessage = async (text: string) => {
-    if (!text.trim() || !connected) return;
-   
-    // Add user message to UI immediately
-    const userMessage = {
-      id: `user_${Date.now()}`,
-      text: text,
-      timestamp: new Date()
-    };
-    setUserMessages(prev => [...prev, userMessage]);
-   
-    unlockOnce();
-    await send(text);
+const handleSendMessage = async (text: string) => {
+  if (!text.trim() || !connected) return;
+  
+  // Add user message to UI immediately
+  const userMessage = {
+    id: `user_${Date.now()}`,
+    text: text,
+    timestamp: new Date()
   };
+  setUserMessages(prev => [...prev, userMessage]);
+  
+  unlockOnce();
+  await send(text);
+};
+
 
   const toggleMute = () => {
     setIsMuted(!isMuted);
@@ -177,11 +185,6 @@ function TanakiExperience() {
 
   const mobileMenuItems = ["Dashboard", "Community", "Models", "Features", "Settings"];
 
-  // Clear user messages on component mount (new tab or refresh)
-  useEffect(() => {
-    setUserMessages([]);
-  }, []);
-
   return (
     <div
       style={{ height: "100dvh", width: "100%", position: "relative" }}
@@ -194,12 +197,13 @@ function TanakiExperience() {
     >
       {/* 3D Model Loading Overlay */}
       <ModelLoadingOverlay active={active} progress={progress} />
+
       {/* 3D Experience - Full Screen Background */}
       <Tanaki3DExperience
         message={liveText ? { content: liveText, animation: "Action" } : null}
         chat={() => console.log("Chat triggered")}
       />
-     
+      
       {/* 🔊 Audio Component - EXACT from working code */}
       <TanakiAudio
         ref={audioRef}
@@ -208,6 +212,7 @@ function TanakiExperience() {
           setBlend((prev) => prev * 0.5 + volume * 0.5);
         }}
       />
+
       {/* UI Overlay */}
       <div
         className="fixed top-0 left-0 w-full h-full z-10 flex flex-col justify-between p-6"
@@ -229,7 +234,7 @@ function TanakiExperience() {
                   MEILIN.AI
                 </a>
               </div>
-             
+              
               <div className="hidden md:flex items-center gap-1 ml-6">
                 {menuItems.map((item, index) => (
                   <a
@@ -245,6 +250,7 @@ function TanakiExperience() {
                 ))}
               </div>
             </div>
+
             <div className="flex items-center gap-4">
               {/* Social Links */}
               <div className="hidden md:flex items-center gap-3">
@@ -263,6 +269,7 @@ function TanakiExperience() {
                   GITHUB
                 </a>
               </div>
+
               <div className="md:hidden relative">
                 <button
                   onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -270,9 +277,10 @@ function TanakiExperience() {
                 >
                   <Menu size={20} />
                 </button>
+
                 <div
-                  className={`absolute ${isMenuOpen ? "flex opacity-100 scale-100" : "opacity-0 scale-95 pointer-events-none"}
-                    flex-col bg-gray-900/10 border border-cyan-500/20 p-4 rounded-2xl right-0 top-full w-64
+                  className={`absolute ${isMenuOpen ? "flex opacity-100 scale-100" : "opacity-0 scale-95 pointer-events-none"} 
+                    flex-col bg-gray-900/10 border border-cyan-500/20 p-4 rounded-2xl right-0 top-full w-64 
                     transition-all duration-300 shadow-2xl z-20`}
                 >
                   {mobileMenuItems.map((item) => (
@@ -305,6 +313,7 @@ function TanakiExperience() {
               </div>
             </div>
           </nav>
+
           <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'end', marginTop: '25px', marginRight: "20px" }}>
             <div className="flex items-center gap-3 py-2 px-4 rounded-2xl bg-gradient-to-r from-cyan-500/10 to-purple-500/10 border border-cyan-500/30 shadow-lg">
               <div className="flex items-center gap-2">
@@ -326,76 +335,47 @@ function TanakiExperience() {
             </div>
           </div>
         </div>
+
         {/* Chat Interface */}
- <div
-        ref={overlayRef}
-        className="w-full md:w-[480px] h-[55vh] md:h-[75vh] flex flex-col bg-gradient-to-br from-gray-900/10 to-cyan-900/10 p-5 rounded-3xl shadow-2xl border border-cyan-500/20 pointer-events-auto fixed bottom-0 left-0 md:relative md:bottom-auto md:left-auto mobile-chat"
-        style={{ pointerEvents: "auto" as const }}
-      >
-        <div className="flex items-center justify-between p-4 rounded-2xl bg-gradient-to-r from-cyan-500/10 to-purple-500/10 border border-cyan-500/20 shadow-inner">
-          <div className="flex items-center gap-3">
-            <div className="w-3 h-3 bg-cyan-400 rounded-full animate-pulse"></div>
-            <span className="text-cyan-300 font-bold text-lg tracking-wide" style={{ fontFamily: "'Orbitron', sans-serif" }}>
-              NEURAL_CHAT
-            </span>
-          </div>
-          <div className="flex items-center gap-2 text-cyan-200/70 text-sm">
-            <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-            <span style={{ fontFamily: "'Rajdhani', sans-serif" }}>SYSTEM ACTIVE</span>
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4 rounded-2xl bg-black/10 border border-cyan-500/10 shadow-inner mt-3">
-          {[...userMessages, ...events
-            .filter(e => e._kind === "interactionRequest" && e.action === "says" && e.content)
-            .map(event => ({
-              id: event._id,
-              text: event.content,
-              timestamp: new Date(event._timestamp || Date.now()),
-              isAI: true
-            }))]
-            .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
-            .slice(-10) // Show last 10 messages total
-            .map((msg) => (
-              <div
-                key={msg.id}
-                className={`mb-3 p-3 rounded-xl ${
-                  msg.isAI
-                    ? "bg-purple-500/10 border border-purple-500/30 ml-8"
-                    : "bg-cyan-500/10 border border-cyan-500/30 mr-8"
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  <div className={`w-2 h-2 rounded-full ${
-                    msg.isAI ? "bg-purple-400" : "bg-cyan-400"
-                  }`}></div>
-                  <strong className={`text-sm ${
-                    msg.isAI ? "text-purple-300" : "text-cyan-300"
-                  }`}>
-                    {msg.isAI ? "MEILIN" : "YOU"}
-                  </strong>
-                  {!msg.isAI && (
-                    <div className="flex items-center gap-1 bg-cyan-500/20 px-2 py-1 rounded-full">
-                      <span className="text-xs text-cyan-300 font-medium">LIVE</span>
-                      <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-pulse"></div>
+          <div
+                  ref={overlayRef}
+                  className="w-full md:w-[480px] h-[55vh] md:h-[75vh] flex flex-col bg-gradient-to-br from-gray-900/10 to-cyan-900/10 p-5 rounded-3xl shadow-2xl border border-cyan-500/20 pointer-events-auto fixed bottom-0 left-0 md:relative md:bottom-auto md:left-auto mobile-chat"
+                  style={{ pointerEvents: "auto" as const }}
+                >
+                  <div className="flex items-center justify-between p-4 rounded-2xl bg-gradient-to-r from-cyan-500/10 to-purple-500/10 border border-cyan-500/20 shadow-inner">
+                    <div className="flex items-center gap-3">
+                      <div className="w-3 h-3 bg-cyan-400 rounded-full animate-pulse"></div>
+                      <span className="text-cyan-300 font-bold text-lg tracking-wide" style={{ fontFamily: "'Orbitron', sans-serif" }}>
+                        NEURAL_CHAT
+                      </span>
                     </div>
-                  )}
+                    <div className="flex items-center gap-2 text-cyan-200/70 text-sm">
+                      <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                      <span style={{ fontFamily: "'Rajdhani', sans-serif" }}>SYSTEM ACTIVE</span>
+                    </div>
+                  </div>
+
+          <div className="flex-1 overflow-y-auto p-4 rounded-2xl bg-black/10 border border-cyan-500/10 shadow-inner mt-3">
+            {userMessages
+              .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+              .slice(-10)
+              .map((msg) => (
+                <div 
+                  key={msg.id}
+                  className={`mb-3 p-3 rounded-xl ${msg.isAI ? "bg-purple-500/10" : "bg-cyan-500/10"}`}
+                >
+                  <strong>{msg.isAI ? "MEILIN" : "YOU"}</strong>
+                  <div>{msg.text}</div>
                 </div>
-                <div className={`text-sm ${
-                  msg.isAI ? "text-purple-100" : "text-cyan-100"
-                }`}>
-                  {msg.text}
-                </div>
+              ))}
+            {userMessages.length === 0 && (
+              <div className="text-center py-8 text-cyan-300/50">
+                Start a conversation with MEILIN
               </div>
-            ))}
-         
-          {userMessages.length === 0 &&
-           events.filter(e => e._kind === "interactionRequest" && e.action === "says").length === 0 && (
-            <div className="text-center py-8 text-cyan-300/50">
-              <div className="text-lg mb-2">Start a conversation with MEILIN</div>
-              <div className="text-sm">Ask anything and get AI-powered responses</div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+
+
         {/* Chat Input */}
         <div className="mt-4">
           <ChatInput
@@ -408,6 +388,7 @@ function TanakiExperience() {
           />
         </div>
       </div>
+
         {/* Mute Button */}
         <button
           onClick={toggleMute}
@@ -415,11 +396,13 @@ function TanakiExperience() {
         >
           {isMuted ? "🔇" : "🔊"}
         </button>
+
         <VisuallyHidden>
           <div aria-live="polite" aria-atomic="true">
             {liveText}
           </div>
         </VisuallyHidden>
+
         <style jsx>{`
           @media (max-width: 768px) {
             .mobile-chat {
@@ -430,28 +413,29 @@ function TanakiExperience() {
               border-radius: 20px !important;
             }
           }
-         
+          
           ::-webkit-scrollbar {
             width: 6px;
           }
-         
+          
           ::-webkit-scrollbar-track {
             background: rgba(6, 182, 212, 0.1);
             border-radius: 10px;
           }
-         
+          
           ::-webkit-scrollbar-thumb {
             background: rgba(6, 182, 212, 0.4);
             border-radius: 10px;
           }
-         
+          
           ::-webkit-scrollbar-thumb:hover {
             background: rgba(6, 182, 212, 0.6);
           }
         `}</style>
+
         <style jsx global>{`
           @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700&family=Rajdhani:wght@400;500;600;700&display=swap');
-         
+          
           .hover\\:drop-shadow-glow:hover {
             filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.6));
           }
@@ -464,13 +448,16 @@ function TanakiExperience() {
 /* -------------------------------------------------- */
 /* 3D Model Loading Overlay */
 /* -------------------------------------------------- */
+
 interface ModelLoadingOverlayProps {
   active: boolean;
   progress: number;
 }
+
 function ModelLoadingOverlay({ active, progress }: ModelLoadingOverlayProps) {
   const [simulatedProgress, setSimulatedProgress] = useState(0);
   const simulationRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // EXACT same simulation logic as working code
   useEffect(() => {
     if (!active) {
@@ -481,6 +468,7 @@ function ModelLoadingOverlay({ active, progress }: ModelLoadingOverlayProps) {
       }
       return;
     }
+
     // Simulate progress with diminishing returns (never quite reaches 100)
     simulationRef.current = setInterval(() => {
       setSimulatedProgress((prev) => {
@@ -490,6 +478,7 @@ function ModelLoadingOverlay({ active, progress }: ModelLoadingOverlayProps) {
         return prev + remaining * 0.08;
       });
     }, 100);
+
     return () => {
       if (simulationRef.current) {
         clearInterval(simulationRef.current);
@@ -497,15 +486,19 @@ function ModelLoadingOverlay({ active, progress }: ModelLoadingOverlayProps) {
       }
     };
   }, [active]);
+
   // Show while any three loader is active, but especially helpful for the big GLB.
   if (!active || progress >= 100) return null;
+
   const pct = Math.max(0, Math.min(100, Math.round(simulatedProgress)));
+
   const label = "Loading 3D model…";
+
   return (
     <div className="fixed inset-0 flex flex-col items-center justify-center bg-white z-[1000] text-center">
-      <Lottie
-        animationData={loadingAnimation}
-        className="w-[300px] h-[300px] sm:w-[400px] sm:h-[400px] lg:w-[600px] lg:h-[600px]"
+      <Lottie 
+        animationData={loadingAnimation} 
+        className="w-[300px] h-[300px] sm:w-[400px] sm:h-[400px] lg:w-[600px] lg:h-[600px]" 
       />
       <div className="w-full max-w-md mt-6">
         <div className="flex justify-between items-center mb-2">
@@ -513,7 +506,7 @@ function ModelLoadingOverlay({ active, progress }: ModelLoadingOverlayProps) {
           <span className="text-gray-700">{pct}%</span>
         </div>
         <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-          <div
+          <div 
             className="h-full bg-gradient-to-r from-cyan-500 to-purple-500 transition-all duration-300"
             style={{ width: `${pct}%` }}
           />
