@@ -68,7 +68,7 @@ function TanakiExperience() {
 
   const [liveText, setLiveText] = useState("");
   const [mouthBlend, setMouthBlend] = useState(0);
-
+  const lastSpokenIdRef = useRef<string | null>(null);
   const [messages, setMessages] = useState<
     Array<{
       id: string;
@@ -93,44 +93,27 @@ function TanakiExperience() {
   /* -------------------------------------------------- */
 
 useEffect(() => {
-  const onInteraction = (e: any) => {
-    if (e?._kind !== "interactionRequest") return;
-    if (e?.action !== "says") return;
+  const latest = [...events]
+    .reverse()
+    .find((e) => e._kind === "interactionRequest" && e.action === "says");
 
-    console.log("[AI Event Received]", e); // ✅ logs the raw event
+  if (!latest) return;
+  if (lastSpokenIdRef.current === latest._id) return;
 
-    setMessages((prev) => {
-      if (prev.some((m) => m.id === e._id)) {
-        console.log("[Duplicate message ignored]", e._id);
-        return prev;
-      }
+  lastSpokenIdRef.current = latest._id;
 
-      const newMsg = {
-        id: e._id,
-        text: e.content,
-        isAI: true,
-        timestamp: normalizeTimestamp(e._timestamp),
-      };
+  setMessages((prev) => [
+    ...prev,
+    {
+      id: latest._id,
+      text: latest.content,
+      isAI: true,
+      timestamp: normalizeTimestamp(latest._timestamp),
+    },
+  ]);
 
-      console.log("[New AI message added]", newMsg);
-
-      return [...prev, newMsg];
-    });
-
-    console.log("[Live text updated]", e.content);
-    setLiveText(e.content);
-  };
-
-  soul.on("interactionRequest", onInteraction);
-
-  console.log("✅ AI listener attached");
-
-  return () => {
-    soul.off("interactionRequest", onInteraction);
-    console.log("❌ AI listener removed");
-  };
-}, [soul]);
-
+  setLiveText(latest.content);
+}, [events]);
 
   /* -------------------------------------------------- */
   /* TTS audio stream */
