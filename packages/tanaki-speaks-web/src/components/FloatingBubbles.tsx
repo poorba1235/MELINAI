@@ -31,7 +31,7 @@ export function FloatingBubbles({ events }: { events: any[] }) {
         isAI: false,
         timestamp: e._timestamp
       }));
-
+  
     // Combine and sort by timestamp
     const allMessages = [...aiMessages, ...userMessages]
       .sort((a, b) => a.timestamp - b.timestamp)

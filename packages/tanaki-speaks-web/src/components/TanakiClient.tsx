@@ -1,14 +1,12 @@
 /** @typedef {import("@/components/TanakiAudio").TanakiAudioHandle} TanakiAudioHandle */
 
-import loadingAnimation from "@/../public/loading.json";
 import { ChatInput } from "@/components/ChatInput";
 import { TanakiAudio } from "@/components/TanakiAudio";
 import { useTanakiSoul } from "@/hooks/useTanakiSoul";
 import { base64ToUint8 } from "@/utils/base64";
 import { SoulEngineProvider } from "@opensouls/react";
 import { useProgress } from "@react-three/drei";
-import Lottie from "lottie-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Tanaki3DExperience } from "./3d/Tanaki3DExperience";
 
 function readBoolEnv(value: unknown, fallback: boolean): boolean {
@@ -52,7 +50,7 @@ function TanakiExperience() {
   const unlockedOnceRef = useRef(false);
   const [liveText, setLiveText] = useState("");
   
-  // Simple chat state
+  // Simple chat messages array
   const [messages, setMessages] = useState<Array<{
     id: string;
     text: string;
@@ -68,24 +66,28 @@ function TanakiExperience() {
 
   // When AI responds, add to messages
   useEffect(() => {
-    const aiResponse = events
-      .filter(e => e._kind === "interactionRequest" && e.action === "says")
-      .find(e => lastSpokenIdRef.current !== e._id);
+    // Get all new AI responses
+    const aiResponses = events.filter(e => 
+      e._kind === "interactionRequest" && e.action === "says"
+    );
 
-    if (aiResponse) {
-      lastSpokenIdRef.current = aiResponse._id;
-      setLiveText(aiResponse.content);
+    aiResponses.forEach(event => {
+      if (lastSpokenIdRef.current === event._id) return;
+      lastSpokenIdRef.current = event._id;
+      console.log(event,event.content)
+      setLiveText(event.content);
       
+      // Add to messages if not already there
       setMessages(prev => {
-        if (prev.some(msg => msg.id === aiResponse._id)) return prev;
+        if (prev.some(msg => msg.id === event._id)) return prev;
         return [...prev, {
-          id: aiResponse._id,
-          text: aiResponse.content,
+          id: event._id,
+          text: event.content,
           isAI: true,
-          timestamp: aiResponse._timestamp
+          timestamp: event._timestamp
         }];
       });
-    }
+    });
   }, [events]);
 
   // Listen for audio TTS
@@ -156,13 +158,8 @@ function TanakiExperience() {
   const { active, progress } = useProgress();
 
   return (
-    <div className="h-screen w-screen relative overflow-hidden">
-      {/* Loading */}
-      {active && progress < 100 && (
-        <ModelLoadingOverlay active={active} progress={progress} />
-      )}
-      
-      {/* 3D Background */}
+    <div className="h-screen w-screen relative">
+      {/* 3D Background - Simple */}
       <Tanaki3DExperience />
       
       {/* Audio */}
@@ -174,56 +171,56 @@ function TanakiExperience() {
         }}
       />
       
-      {/* Main UI */}
-      <div className="absolute inset-0 z-10 flex flex-col p-4">
+      {/* SIMPLE CHAT UI - No animations, no z-index issues */}
+      <div className="absolute inset-0 flex flex-col bg-gradient-to-b from-transparent via-transparent to-black/20">
         
-        {/* Status */}
-        <div className="flex justify-between items-center mb-4">
-          <div className="flex items-center gap-2 bg-black/50 backdrop-blur-sm px-3 py-1.5 rounded-lg">
-            <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-            <span className="text-white text-sm">
-              {connected ? 'Connected' : 'Disconnected'}
-            </span>
-            {connectedUsers > 0 && (
-              <span className="text-gray-300 text-xs ml-2">
-                {connectedUsers} online
+        {/* Simple Status */}
+        <div className="p-4">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center gap-2 bg-black/70 text-white px-3 py-1.5 rounded-lg">
+              <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
+              <span className="text-sm">
+                {connected ? 'Connected' : 'Disconnected'}
               </span>
-            )}
-          </div>
-          <div className="text-white text-sm bg-black/50 backdrop-blur-sm px-3 py-1.5 rounded-lg">
-            tanaki
+              {connectedUsers > 0 && (
+                <span className="text-gray-300 text-xs ml-2">
+                  {connectedUsers} online
+                </span>
+              )}
+            </div>
+            <div className="text-white text-sm bg-black/70 px-3 py-1.5 rounded-lg">
+              MEILIN
+            </div>
           </div>
         </div>
         
-        {/* Chat Messages */}
-        <div className="flex-1 overflow-y-auto mb-4">
+        {/* SIMPLE CHAT MESSAGES - Just show them */}
+        <div className="flex-1 overflow-y-auto px-4">
           {messages.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-gray-400">
+            <div className="h-full flex items-center justify-center text-gray-300">
               <div className="text-center">
                 <div className="text-lg mb-2">Start chatting</div>
                 <div className="text-sm">Type a message below</div>
               </div>
             </div>
           ) : (
-            <div className="space-y-3 max-w-2xl mx-auto w-full">
-              {messages.slice(-10).map((msg) => (
+            <div className="space-y-3 max-w-2xl mx-auto">
+              {messages.slice(-20).map((msg) => (
                 <div
                   key={msg.id}
                   className={`flex ${msg.isAI ? 'justify-start' : 'justify-end'}`}
                 >
                   <div
-                    className={`max-w-[80%] px-4 py-3 rounded-2xl ${
+                    className={`max-w-[80%] px-4 py-3 rounded-lg ${
                       msg.isAI
-                        ? 'bg-purple-600/90 text-white rounded-bl-sm'
-                        : 'bg-blue-600/90 text-white rounded-br-sm'
-                    } backdrop-blur-sm border ${
-                      msg.isAI ? 'border-purple-400/30' : 'border-blue-400/30'
+                        ? 'bg-purple-700 text-white'
+                        : 'bg-blue-700 text-white'
                     }`}
                   >
-                    <div className="font-semibold text-xs mb-1 opacity-80">
-                      {msg.isAI ? 'Tanaki' : 'You'}
+                    <div className="font-semibold text-xs mb-1">
+                      {msg.isAI ? 'MEILIN' : 'You'}
                     </div>
-                    <div className="text-sm md:text-base">{msg.text}</div>
+                    <div className="text-sm">{msg.text}</div>
                   </div>
                 </div>
               ))}
@@ -231,8 +228,8 @@ function TanakiExperience() {
           )}
         </div>
         
-        {/* Chat Input */}
-        <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10">
+        {/* SIMPLE INPUT - No complex overlay */}
+        <div className="p-4">
           <div className="max-w-2xl mx-auto">
             <div className="sr-only" aria-live="polite">
               {liveText}
@@ -241,62 +238,26 @@ function TanakiExperience() {
               disabled={!connected}
               onUserGesture={unlockOnce}
               onSend={handleSend}
-              placeholder="Message Tanaki..."
+              placeholder="Message MEILIN..."
             />
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-function ModelLoadingOverlay({ active, progress }: { active: boolean; progress: number }) {
-  const [simulatedProgress, setSimulatedProgress] = useState(0);
-  const simulationRef = useRef<any>(null);
-
-  useEffect(() => {
-    if (!active) {
-      setSimulatedProgress(0);
-      if (simulationRef.current) {
-        clearInterval(simulationRef.current);
-      }
-      return;
-    }
-
-    simulationRef.current = setInterval(() => {
-      setSimulatedProgress((prev) => {
-        const remaining = 90 - prev;
-        return remaining <= 0 ? prev : prev + remaining * 0.08;
-      });
-    }, 100);
-
-    return () => {
-      if (simulationRef.current) {
-        clearInterval(simulationRef.current);
-      }
-    };
-  }, [active]);
-
-  const pct = Math.max(0, Math.min(100, Math.round(simulatedProgress)));
-
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-white">
-      <Lottie 
-        animationData={loadingAnimation} 
-        className="w-64 h-64 sm:w-80 sm:h-80" 
-      />
-      <div className="w-64 sm:w-80 mt-4">
-        <div className="flex justify-between text-sm text-gray-600 mb-2">
-          <span>Loading model...</span>
-          <span>{pct}%</span>
+      
+      {/* Simple Loading */}
+      {active && progress < 100 && (
+        <div className="absolute inset-0 bg-white flex items-center justify-center z-50">
+          <div className="text-center">
+            <div className="text-lg mb-4">Loading...</div>
+            <div className="w-64 h-2 bg-gray-200 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-blue-500 transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          </div>
         </div>
-        <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-          <div 
-            className="h-full bg-gradient-to-r from-cyan-500 to-purple-500 transition-all duration-200"
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-      </div>
+      )}
     </div>
   );
 }
