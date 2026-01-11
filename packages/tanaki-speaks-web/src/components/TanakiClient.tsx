@@ -2,6 +2,7 @@
 
 import loadingAnimation from "@/../public/loading.json";
 import { ChatInput } from "@/components/ChatInput";
+import { FloatingBubbles } from "@/components/FloatingBubbles";
 import { TanakiAudio } from "@/components/TanakiAudio";
 import { useTanakiSoul } from "@/hooks/useTanakiSoul";
 import { base64ToUint8 } from "@/utils/base64";
@@ -11,6 +12,7 @@ import { useProgress } from "@react-three/drei";
 import Lottie from "lottie-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Tanaki3DExperience } from "./3d/Tanaki3DExperience";
+import { useMemo } from "react";
 
 // Import icons
 import { Cpu, Home, Menu, Settings, Users, Zap } from "lucide-react";
@@ -63,10 +65,7 @@ function TanakiExperience() {
   const [isMuted, setIsMuted] = useState(false);
   const [userMessages, setUserMessages] = useState<{id: string, text: string, timestamp: Date, isAI: boolean}[]>([]);
 
-  // Track which AI responses we've already processed
   const processedAIResponseIds = useRef<Set<string>>(new Set());
-  
-  // Track when we sent our last message to know which AI response is for us
 
   const unlockOnce = useCallback(() => {
     if (unlockedOnceRef.current) return;
@@ -74,7 +73,11 @@ function TanakiExperience() {
     void audioRef.current?.unlock();
   }, []);
 
-  // When Tanaki says something new, update aria-live text
+  const statusIndicator = useMemo(() => {
+    return connected ? "🟢" : "🔴";
+  }, [connected]);
+
+  // When Tanaki says something new, update aria-live text - EXACTLY like working code
   useEffect(() => {
     const latest = [...events]
       .reverse()
@@ -85,7 +88,7 @@ function TanakiExperience() {
     setLiveText(latest.content);
   }, [events.length, events[events.length - 1]?.content]);
 
-  // Listen for Soul Engine ephemeral audio events
+  // Listen for Soul Engine ephemeral audio events - EXACTLY like working code
   useEffect(() => {
     const onChunk = (evt: any) => {
       const data = evt?.data as any;
@@ -133,7 +136,7 @@ function TanakiExperience() {
     };
   }, [soul]);
 
-  // Measure the bottom overlay
+  // Measure the bottom overlay - EXACTLY like working code
   useEffect(() => {
     const el = overlayRef.current;
     if (!el) return;
@@ -153,66 +156,56 @@ function TanakiExperience() {
     };
   }, []);
 
-  // Process AI responses - FIXED: Only add responses that come AFTER our messages
-// Process AI responses - SIMPLIFIED VERSION
+  // Process AI responses - SIMPLIFIED AND CORRECTED
+  useEffect(() => {
+    // Get all AI responses from events
+    const aiResponses = events
+      .filter(e => e._kind === "interactionRequest" && e.action === "says" && e.content)
+      .map(event => ({
+        id: event._id,
+        text: event.content,
+        timestamp: new Date(event._timestamp || Date.now()),
+        isAI: true
+      }));
 
-useEffect(() => {
-  // Get all AI responses from events
-  const aiResponses = events
-    .filter(e => e._kind === "interactionRequest" && e.action === "says" && e.content)
-    .map(event => ({
-      id: event._id,
-      text: event.content,
-      timestamp: new Date(event._timestamp || Date.now()),
-      isAI: true
-    }));
+    if (aiResponses.length === 0) return;
 
-  if (aiResponses.length === 0) return;
+    // Find new responses that we haven't processed yet
+    const newAIResponses = aiResponses.filter(response => 
+      !processedAIResponseIds.current.has(response.id)
+    );
 
-  // Filter out responses we've already processed
-  const newAIResponses = aiResponses.filter(response => 
-    !processedAIResponseIds.current.has(response.id)
-  );
+    if (newAIResponses.length === 0) return;
 
-  if (newAIResponses.length === 0) return;
-
-  // Process ALL new AI responses (not just one)
-  newAIResponses.forEach(response => {
-    processedAIResponseIds.current.add(response.id);
-    
-    // Add to our messages
-    setUserMessages(prev => {
-      // Check if we already have this message (by ID)
-      if (prev.some(msg => msg.id === response.id)) {
-        return prev;
-      }
-      
-      // Add the AI response
-      return [...prev, response];
+    // Add all new AI responses to messages
+    newAIResponses.forEach(response => {
+      processedAIResponseIds.current.add(response.id);
     });
-  });
-}, [events]);
 
-const handleSendMessage = async (text: string) => {
-  if (!text.trim() || !connected) return;
-  
-  // Add user message to UI
-  const userMessage = {
-    id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-    text: text,
-    timestamp: new Date(),
-    isAI: false
+    // Add to messages in one batch to avoid multiple re-renders
+    setUserMessages(prev => {
+      const existingIds = new Set(prev.map(msg => msg.id));
+      const messagesToAdd = newAIResponses.filter(response => !existingIds.has(response.id));
+      return [...prev, ...messagesToAdd];
+    });
+  }, [events]);
+
+  const handleSendMessage = async (text: string) => {
+    if (!text.trim() || !connected) return;
+    
+    // Add user message to UI
+    const userMessage = {
+      id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      text: text,
+      timestamp: new Date(),
+      isAI: false
+    };
+    
+    setUserMessages(prev => [...prev, userMessage]);
+    
+    unlockOnce();
+    await send(text);
   };
-  
-  setUserMessages(prev => [...prev, userMessage]);
-  
-  // REMOVE THESE LINES - they cause the problem:
-  // lastMessageSentTime.current = new Date();
-  // waitingForResponse.current = true;
-  
-  unlockOnce();
-  await send(text);
-};
 
   const toggleMute = () => {
     setIsMuted(!isMuted);
@@ -223,8 +216,6 @@ const handleSendMessage = async (text: string) => {
     if (confirm("Clear your chat history?")) {
       setUserMessages([]);
       processedAIResponseIds.current.clear();
-      lastMessageSentTime.current = null;
-      waitingForResponse.current = false;
     }
   };
 
@@ -268,6 +259,9 @@ const handleSendMessage = async (text: string) => {
           setBlend((prev) => prev * 0.5 + volume * 0.5);
         }}
       />
+
+      {/* Floating Bubbles - Add this like in working code */}
+      <FloatingBubbles events={events} avoidBottomPx={overlayHeight} maxBubbles={5} />
 
       {/* UI Overlay */}
       <div
@@ -482,8 +476,6 @@ const handleSendMessage = async (text: string) => {
             <ChatInput
               disabled={!connected}
               onUserGesture={unlockOnce}
-              isRecording={isRecording}
-              onVoiceClick={() => setIsRecording(!isRecording)}
               onSend={handleSendMessage}
               placeholder="Type your message..."
             />
@@ -640,3 +632,4 @@ function ModelLoadingOverlay({ active, progress }: ModelLoadingOverlayProps) {
     </div>
   );
 }
+
