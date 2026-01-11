@@ -1,74 +1,132 @@
-// SimpleChatDisplay.js
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 
-type ChatMessage = {
+import type { StoreEvent } from "@/hooks/useTanakiSoul";
+
+type BubbleRole = "user" | "tanaki";
+
+type Bubble = {
   id: string;
-  text: string;
-  isAI: boolean;
-  timestamp: number;
+  role: BubbleRole;
+  content: string;
+  durationMs: number;
+  opacity: number;
 };
 
-export function FloatingBubbles({ events }: { events: any[] }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+}
+
+export type FloatingBubblesProps = {
+  events: StoreEvent[];
+  avoidBottomPx: number;
+  maxBubbles?: number;
+};
+
+export function FloatingBubbles({
+  events,
+  avoidBottomPx,
+  maxBubbles = 14,
+}: FloatingBubblesProps) {
+  const [reducedMotion, setReducedMotion] = useState(prefersReducedMotion());
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    // Get AI responses from events
-    const aiMessages = events
-      .filter(e => e._kind === "interactionRequest" && e.action === "says")
-      .map(e => ({
-        id: e._id,
-        text: e.content,
-        isAI: true,
-        timestamp: e._timestamp
-      }));
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = () => setReducedMotion(mq.matches);
+    onChange();
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
 
-    // Get user messages from events
-    const userMessages = events
-      .filter(e => (e._kind === "user-added" || (e._kind === "perception" && !e.internal)) && e.action === "said")
-      .map(e => ({
-        id: e._id,
-        text: e.content,
-        isAI: false,
-        timestamp: e._timestamp
-      }));
-  
-    // Combine and sort by timestamp
-    const allMessages = [...aiMessages, ...userMessages]
-      .sort((a, b) => a.timestamp - b.timestamp)
-      .slice(-10); // Keep last 10 messages
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const tickMs = reducedMotion ? 500 : 200;
+    const id = window.setInterval(() => setNow(Date.now()), tickMs);
+    return () => window.clearInterval(id);
+  }, [reducedMotion]);
 
-    setMessages(allMessages);
-  }, [events]);
+  const bubbles = useMemo<Bubble[]>(() => {
+    const baseDurationMs = reducedMotion ? 4200 : 14000;
+    const fadeInPct = 0.08;
+    const fadeOutStartPct = 0.92;
 
-  if (messages.length === 0) {
-    return (
-      <div className="text-center py-8 text-gray-400">
-        Start chatting with Tanaki...
-      </div>
-    );
-  }
+    const relevant = events.filter((e) => {
+      if (e._kind === "perception") return !e.internal && e.action === "said";
+      if (e._kind === "interactionRequest") return e.action === "says";
+      return false;
+    });
+
+    const fresh = relevant.filter((e) => now - e._timestamp >= 0 && now - e._timestamp < baseDurationMs);
+    const visible = fresh.slice(-maxBubbles);
+
+    return visible.map((e) => {
+      const ageMs = now - e._timestamp;
+      const t = clamp(ageMs / baseDurationMs, 0, 1);
+      const fadeOpacity =
+        t < fadeInPct
+          ? t / fadeInPct
+          : t < fadeOutStartPct
+            ? 1
+            : (1 - t) / (1 - fadeOutStartPct);
+
+      return {
+        id: `${e._id}-bubble`,
+        role: e._kind === "interactionRequest" ? "tanaki" : "user",
+        content: e.content,
+        durationMs: baseDurationMs,
+        opacity: clamp(fadeOpacity, 0, 1),
+      };
+    });
+  }, [events, maxBubbles, reducedMotion, now]);
 
   return (
-    <div className="space-y-3 p-4">
-      {messages.map((msg) => (
-        <div
-          key={msg.id}
-          className={`flex ${msg.isAI ? 'justify-start' : 'justify-end'}`}
-        >
-          <div
-            className={`max-w-[80%] rounded-lg p-3 ${
-              msg.isAI
-                ? 'bg-purple-100 text-gray-800'
-                : 'bg-blue-100 text-gray-800'
-            }`}
-          >
-            <div className="font-semibold text-sm mb-1">
-              {msg.isAI ? 'Tanaki' : 'You'}
+    <div
+      className="tanaki-bubble-layer"
+      aria-hidden="true"
+      style={
+        {
+          // Reserve room for the bottom input overlay so bubbles stack above it.
+          ["--tanaki-bubble-avoid-bottom" as any]: `${Math.max(0, avoidBottomPx)}px`,
+        } as CSSProperties
+      }
+    >
+      <div className="tanaki-bubble-stack">
+        {bubbles.map((b, i) => {
+          const isUser = b.role === "user";
+          // Slightly dim older bubbles so the stack reads like a timeline.
+          const indexOpacity = clamp(1 - (bubbles.length - 1 - i) * 0.08, 0.35, 1);
+          return (
+            <div
+              key={b.id}
+              className={[
+                "tanaki-bubble-item",
+                isUser ? "tanaki-bubble-item--user" : "tanaki-bubble-item--tanaki",
+                reducedMotion ? "tanaki-bubble-item--reduced-motion" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              style={
+                {
+                  // We derive fade/age directly from timestamps, so don't rely on CSS animation state.
+                  animation: "none",
+                  opacity: b.opacity,
+                  filter: `opacity(${indexOpacity})`,
+                } as CSSProperties
+              }
+            >
+              <div className="tanaki-bubble">{b.content}</div>
             </div>
-            <div className="text-sm">{msg.text}</div>
-          </div>
-        </div>
-      ))}
+          );
+        })}
+      </div>
     </div>
   );
 }
+
+

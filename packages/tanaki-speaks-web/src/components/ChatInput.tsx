@@ -1,5 +1,5 @@
 import { Box, Flex } from "@radix-ui/themes";
-import { Send, Mic } from "lucide-react";
+import { Mic, Send } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
 export type ChatInputProps = {
@@ -24,52 +24,46 @@ export function ChatInput({
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const send = useCallback(async () => {
-    if (disabled || isSending) return;
-
     const trimmed = text.trim();
     if (!trimmed) return;
-
-    // 🔑 MUST happen immediately for audio unlock
-    onUserGesture?.();
-
     setIsSending(true);
     try {
       await onSend(trimmed);
       setText("");
     } finally {
       setIsSending(false);
-      // ✅ Single, safe focus restore
+      // Restore focus after sending
       requestAnimationFrame(() => inputRef.current?.focus());
+      window.setTimeout(() => inputRef.current?.focus(), 0);
     }
-  }, [text, disabled, isSending, onSend, onUserGesture]);
+  }, [onSend, text]);
 
   return (
     <Flex gap="3" align="center" style={{ width: "100%" }}>
-      {/* 🎤 Voice Button */}
+      {/* Voice Recording Button */}
       <button
-        type="button"
         onClick={() => {
-          if (disabled || isSending) return;
           onUserGesture?.();
           onVoiceClick?.();
         }}
-        disabled={disabled || isSending}
         className={`p-4 rounded-2xl shadow-lg border transition-all duration-300 ${
           isRecording
             ? "bg-red-500/20 border-red-400/50 text-red-300 animate-pulse shadow-red-500/25"
             : "bg-cyan-500/10 border-cyan-500/30 hover:bg-cyan-500/20 text-cyan-300 hover:shadow-cyan-500/25"
         } ${disabled || isSending ? "cursor-not-allowed opacity-30" : ""}`}
+        disabled={disabled || isSending}
         onPointerDownCapture={() => onUserGesture?.()}
         onTouchStartCapture={() => onUserGesture?.()}
       >
         <Mic size={20} />
       </button>
 
-      {/* ⌨️ Text Input */}
+      {/* Text Input */}
       <Box style={{ flex: 1, minWidth: 0 }}>
         <input
           ref={inputRef}
           type="text"
+          className="w-full placeholder:text-cyan-200/40 placeholder:italic p-4 rounded-2xl bg-black/10 border border-cyan-500/20 text-cyan-100 focus:border-cyan-400/50 focus:outline-none transition-all duration-300 shadow-inner disabled:opacity-30 disabled:cursor-not-allowed"
           value={text}
           placeholder={placeholder}
           disabled={disabled || isSending}
@@ -78,18 +72,20 @@ export function ChatInput({
           onPointerDownCapture={() => onUserGesture?.()}
           onTouchStartCapture={() => onUserGesture?.()}
           onKeyDown={(e) => {
-            if (e.key !== "Enter" || e.shiftKey) return;
+            if (e.key !== "Enter") return;
+            if (e.shiftKey) return;
             e.preventDefault();
             void send();
           }}
-          className="w-full placeholder:text-cyan-200/40 placeholder:italic p-4 rounded-2xl bg-black/10 border border-cyan-500/20 text-cyan-100 focus:border-cyan-400/50 focus:outline-none transition-all duration-300 shadow-inner disabled:opacity-30 disabled:cursor-not-allowed"
         />
       </Box>
 
-      {/* 🚀 Send Button */}
+      {/* Send Button */}
       <button
-        type="button"
-        onClick={() => void send()}
+        onClick={() => {
+          onUserGesture?.();
+          void send();
+        }}
         disabled={disabled || isSending || text.trim().length === 0}
         className="p-4 rounded-2xl shadow-lg border border-cyan-500/30 bg-gradient-to-r from-cyan-500/20 to-purple-500/20 hover:from-cyan-500/30 hover:to-purple-500/30 text-cyan-300 hover:text-cyan-100 transition-all duration-300 disabled:opacity-30 disabled:cursor-not-allowed hover:shadow-cyan-500/25"
         onPointerDownCapture={() => onUserGesture?.()}
