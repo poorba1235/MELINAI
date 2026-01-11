@@ -1,6 +1,5 @@
 /** @typedef {import("@/components/TanakiAudio").TanakiAudioHandle} TanakiAudioHandle */
 
-import loadingAnimation from "@/../public/loading.json";
 import { ChatInput } from "@/components/ChatInput";
 import { FloatingBubbles } from "@/components/FloatingBubbles";
 import { TanakiAudio } from "@/components/TanakiAudio";
@@ -9,7 +8,6 @@ import { base64ToUint8 } from "@/utils/base64";
 import { SoulEngineProvider } from "@opensouls/react";
 import { Box, Flex, Text, VisuallyHidden } from "@radix-ui/themes";
 import { useProgress } from "@react-three/drei";
-import Lottie from "lottie-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Tanaki3DExperience } from "./3d/Tanaki3DExperience";
 
@@ -217,7 +215,7 @@ function TanakiExperience() {
       />
 
       {/* Use combined messages instead of just events */}
-      <FloatingBubbles events={allMessages} avoidBottomPx={overlayHeight} maxBubbles={5} />
+      <FloatingBubbles events={allMessages} avoidBottomPx={overlayHeight} maxBubbles={4} />
 
       <Box
         ref={overlayRef}
