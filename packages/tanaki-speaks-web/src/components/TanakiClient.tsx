@@ -2,7 +2,7 @@
 
 import loadingAnimation from "@/../public/loading.json";
 import { ChatInput } from "@/components/ChatInput";
-import { FloatingBubbles } from "@/components/FloatingBubbles"; // ← IMPORT THIS
+import { FloatingBubbles } from "@/components/FloatingBubbles";
 import { TanakiAudio } from "@/components/TanakiAudio";
 import { useTanakiSoul } from "@/hooks/useTanakiSoul";
 import { base64ToUint8 } from "@/utils/base64";
@@ -54,6 +54,7 @@ function TanakiExperience() {
   const unlockedOnceRef = useRef(false);
   const [overlayHeight, setOverlayHeight] = useState(240);
   const [liveText, setLiveText] = useState("");
+  const [allMessages, setAllMessages] = useState([]); // Combined messages state
 
   const enableAnimationDebug = useMemo(() => {
     if (import.meta.env.DEV) return true;
@@ -82,6 +83,30 @@ function TanakiExperience() {
     lastSpokenIdRef.current = latest._id;
     setLiveText(latest.content);
   }, [events.length, events[events.length - 1]?.content]);
+
+  // Combine events with user messages
+  useEffect(() => {
+    // Filter out AI responses from events
+    const aiMessages = events.filter(e => 
+      e._kind === "interactionRequest" && e.action === "says"
+    );
+    
+    // Combine with existing messages (keeping user messages)
+    setAllMessages(prev => {
+      // Keep user messages from prev
+      const existingUserMessages = prev.filter(msg => 
+        msg._kind === "user-added" || 
+        (msg._kind === "perception" && msg.action === "said" && !msg.internal)
+      );
+      
+      // Add new AI messages
+      const newAiMessages = aiMessages.filter(aiMsg => 
+        !prev.some(p => p._id === aiMsg._id)
+      );
+      
+      return [...existingUserMessages, ...newAiMessages];
+    });
+  }, [events]);
 
   // Listen for Soul Engine ephemeral audio events
   useEffect(() => {
@@ -151,6 +176,25 @@ function TanakiExperience() {
     };
   }, []);
 
+  const handleSend = async (text) => {
+    if (!text.trim() || !connected) return;
+    
+    // Add user message immediately to allMessages
+    const userMessage = {
+      _id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      _kind: "user-added", // Custom type
+      action: "said",
+      content: text,
+      internal: false,
+      _timestamp: Date.now()
+    };
+    
+    setAllMessages(prev => [...prev, userMessage]);
+    
+    unlockOnce();
+    await send(text);
+  };
+
   return (
     <div
       style={{ height: "100dvh", width: "100%", position: "relative" }}
@@ -159,12 +203,10 @@ function TanakiExperience() {
       }}
       onTouchStartCapture={() => {
         unlockOnce();
-      }}>
+      }}
+    >
       <ModelLoadingOverlay />
-      <Tanaki3DExperience
-        message={liveText ? { content: liveText, animation: "Action" } : null}
-        chat={() => console.log("Chat triggered")}
-      />
+      <Tanaki3DExperience/>
 
       <TanakiAudio
         ref={audioRef}
@@ -174,8 +216,8 @@ function TanakiExperience() {
         }}
       />
 
-      {/* ↓↓↓ ADD THIS LINE - This is what shows AI responses on screen ↓↓↓ */}
-      <FloatingBubbles events={events} avoidBottomPx={overlayHeight} maxBubbles={5} />
+      {/* Use combined messages instead of just events */}
+      <FloatingBubbles events={allMessages} avoidBottomPx={overlayHeight} maxBubbles={5} />
 
       <Box
         ref={overlayRef}
@@ -213,10 +255,7 @@ function TanakiExperience() {
           <ChatInput
             disabled={!connected}
             onUserGesture={unlockOnce}
-            onSend={async (text) => {
-              unlockOnce();
-              await send(text);
-            }}
+            onSend={handleSend}  
           />
         </Box>
       </Box>

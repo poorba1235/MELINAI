@@ -57,6 +57,7 @@ export function FloatingBubbles({
     const fadeOutStartPct = 0.92;
 
     const relevant = events.filter((e) => {
+      if (e._kind === "user-added") return e.action === "said"; // ← ADD THIS
       if (e._kind === "perception") return !e.internal && e.action === "said";
       if (e._kind === "interactionRequest") return e.action === "says";
       return false;
@@ -77,7 +78,7 @@ export function FloatingBubbles({
 
       return {
         id: `${e._id}-bubble`,
-        role: e._kind === "interactionRequest" ? "tanaki" : "user",
+        role: e._kind === "interactionRequest" ? "tanaki" : "user", // user-added → user
         content: e.content,
         durationMs: baseDurationMs,
         opacity: clamp(fadeOpacity, 0, 1),
@@ -128,5 +129,3 @@ export function FloatingBubbles({
     </div>
   );
 }
-
-
