@@ -1,14 +1,14 @@
 /** @typedef {import("@/components/TanakiAudio").TanakiAudioHandle} TanakiAudioHandle */
 
+import loadingAnimation from "@/../public/loading.json";
 import { ChatInput } from "@/components/ChatInput";
-import { FloatingBubbles } from "@/components/FloatingBubbles";
 import { TanakiAudio } from "@/components/TanakiAudio";
 import { useTanakiSoul } from "@/hooks/useTanakiSoul";
 import { base64ToUint8 } from "@/utils/base64";
 import { SoulEngineProvider } from "@opensouls/react";
-import { Box, Flex, Text, VisuallyHidden } from "@radix-ui/themes";
 import { useProgress } from "@react-three/drei";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Lottie from "lottie-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Tanaki3DExperience } from "./3d/Tanaki3DExperience";
 
 function readBoolEnv(value: unknown, fallback: boolean): boolean {
@@ -47,19 +47,18 @@ function TanakiExperience() {
   const audioRef = useRef<TanakiAudioHandle | null>(null);
   const lastSpokenIdRef = useRef<string | null>(null);
   const activeTtsStreamIdRef = useRef<string | null>(null);
-  const overlayRef = useRef<HTMLDivElement | null>(null);
+  
   const [blend, setBlend] = useState(0);
   const unlockedOnceRef = useRef(false);
-  const [overlayHeight, setOverlayHeight] = useState(240);
   const [liveText, setLiveText] = useState("");
-  const [allMessages, setAllMessages] = useState([]); // Combined messages state
-
-  const enableAnimationDebug = useMemo(() => {
-    if (import.meta.env.DEV) return true;
-    if (typeof window === "undefined") return false;
-    const qs = new URLSearchParams(window.location.search);
-    return qs.has("debugAnimations");
-  }, []);
+  
+  // Simple chat state
+  const [messages, setMessages] = useState<Array<{
+    id: string;
+    text: string;
+    isAI: boolean;
+    timestamp: number;
+  }>>([]);
 
   const unlockOnce = useCallback(() => {
     if (unlockedOnceRef.current) return;
@@ -67,46 +66,29 @@ function TanakiExperience() {
     void audioRef.current?.unlock();
   }, []);
 
-  const statusIndicator = useMemo(() => {
-    return connected ? "🟢" : "🔴";
-  }, [connected]);
-
-  // When Tanaki says something new, update aria-live text
+  // When AI responds, add to messages
   useEffect(() => {
-    const latest = [...events]
-      .reverse()
-      .find((e) => e._kind === "interactionRequest" && e.action === "says");
-    if (!latest) return;
-    if (lastSpokenIdRef.current === latest._id) return;
-    lastSpokenIdRef.current = latest._id;
-    setLiveText(latest.content);
-  }, [events.length, events[events.length - 1]?.content]);
+    const aiResponse = events
+      .filter(e => e._kind === "interactionRequest" && e.action === "says")
+      .find(e => lastSpokenIdRef.current !== e._id);
 
-  // Combine events with user messages
-  useEffect(() => {
-    // Filter out AI responses from events
-    const aiMessages = events.filter(e => 
-      e._kind === "interactionRequest" && e.action === "says"
-    );
-    
-    // Combine with existing messages (keeping user messages)
-    setAllMessages(prev => {
-      // Keep user messages from prev
-      const existingUserMessages = prev.filter(msg => 
-        msg._kind === "user-added" || 
-        (msg._kind === "perception" && msg.action === "said" && !msg.internal)
-      );
+    if (aiResponse) {
+      lastSpokenIdRef.current = aiResponse._id;
+      setLiveText(aiResponse.content);
       
-      // Add new AI messages
-      const newAiMessages = aiMessages.filter(aiMsg => 
-        !prev.some(p => p._id === aiMsg._id)
-      );
-      
-      return [...existingUserMessages, ...newAiMessages];
-    });
+      setMessages(prev => {
+        if (prev.some(msg => msg.id === aiResponse._id)) return prev;
+        return [...prev, {
+          id: aiResponse._id,
+          text: aiResponse.content,
+          isAI: true,
+          timestamp: aiResponse._timestamp
+        }];
+      });
+    }
   }, [events]);
 
-  // Listen for Soul Engine ephemeral audio events
+  // Listen for audio TTS
   useEffect(() => {
     const onChunk = (evt: any) => {
       const data = evt?.data as any;
@@ -154,58 +136,36 @@ function TanakiExperience() {
     };
   }, [soul]);
 
-  // Measure the bottom overlay so bubbles can avoid it
-  useEffect(() => {
-    const el = overlayRef.current;
-    if (!el) return;
-
-    const update = () => {
-      const rect = el.getBoundingClientRect();
-      setOverlayHeight(Math.max(120, Math.round(rect.height + 10)));
-    };
-
-    update();
-    const ro = new ResizeObserver(() => update());
-    ro.observe(el);
-    window.addEventListener("resize", update);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", update);
-    };
-  }, []);
-
-  const handleSend = async (text) => {
+  const handleSend = async (text: string) => {
     if (!text.trim() || !connected) return;
     
-    // Add user message immediately to allMessages
+    // Add user message immediately
     const userMessage = {
-      _id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      _kind: "user-added", // Custom type
-      action: "said",
-      content: text,
-      internal: false,
-      _timestamp: Date.now()
+      id: `user_${Date.now()}`,
+      text: text,
+      isAI: false,
+      timestamp: Date.now()
     };
     
-    setAllMessages(prev => [...prev, userMessage]);
+    setMessages(prev => [...prev, userMessage]);
     
     unlockOnce();
     await send(text);
   };
 
-  return (
-    <div
-      style={{ height: "100dvh", width: "100%", position: "relative" }}
-      onPointerDownCapture={() => {
-        unlockOnce();
-      }}
-      onTouchStartCapture={() => {
-        unlockOnce();
-      }}
-    >
-      <ModelLoadingOverlay />
-      <Tanaki3DExperience/>
+  const { active, progress } = useProgress();
 
+  return (
+    <div className="h-screen w-screen relative overflow-hidden">
+      {/* Loading */}
+      {active && progress < 100 && (
+        <ModelLoadingOverlay active={active} progress={progress} />
+      )}
+      
+      {/* 3D Background */}
+      <Tanaki3DExperience />
+      
+      {/* Audio */}
       <TanakiAudio
         ref={audioRef}
         enabled={true}
@@ -213,75 +173,92 @@ function TanakiExperience() {
           setBlend((prev) => prev * 0.5 + volume * 0.5);
         }}
       />
-
-      {/* Use combined messages instead of just events */}
-      <FloatingBubbles events={allMessages} avoidBottomPx={overlayHeight} maxBubbles={4} />
-
-      <Box
-        ref={overlayRef}
-        className="absolute left-4 right-4 bottom-4 max-w-2xl mx-auto"
-        style={{
-          background: "rgba(0,0,0,0.55)",
-          backdropFilter: "blur(10px)",
-          borderRadius: 12,
-          padding: 12,
-        }}
-      >
-        <Flex justify="between" align="center" className="mb-2" gap="3">
-          <Flex align="center" gap="2">
-            <Text size="2">
-              {statusIndicator}
-            </Text>
+      
+      {/* Main UI */}
+      <div className="absolute inset-0 z-10 flex flex-col p-4">
+        
+        {/* Status */}
+        <div className="flex justify-between items-center mb-4">
+          <div className="flex items-center gap-2 bg-black/50 backdrop-blur-sm px-3 py-1.5 rounded-lg">
+            <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+            <span className="text-white text-sm">
+              {connected ? 'Connected' : 'Disconnected'}
+            </span>
             {connectedUsers > 0 && (
-              <Text size="1" color="gray" style={{ opacity: 0.7 }}>
-                {connectedUsers} {connectedUsers === 1 ? "person" : "people"} here
-              </Text>
+              <span className="text-gray-300 text-xs ml-2">
+                {connectedUsers} online
+              </span>
             )}
-          </Flex>
-          <Text size="2" color="gray">
-            tanaki
-          </Text>
-        </Flex>
-
-        <VisuallyHidden>
-          <div aria-live="polite" aria-atomic="true">
-            {liveText}
           </div>
-        </VisuallyHidden>
-
-        <Box className="mt-3">
-          <ChatInput
-            disabled={!connected}
-            onUserGesture={unlockOnce}
-            onSend={handleSend}  
-          />
-        </Box>
-      </Box>
+          <div className="text-white text-sm bg-black/50 backdrop-blur-sm px-3 py-1.5 rounded-lg">
+            tanaki
+          </div>
+        </div>
+        
+        {/* Chat Messages */}
+        <div className="flex-1 overflow-y-auto mb-4">
+          {messages.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-gray-400">
+              <div className="text-center">
+                <div className="text-lg mb-2">Start chatting</div>
+                <div className="text-sm">Type a message below</div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3 max-w-2xl mx-auto w-full">
+              {messages.slice(-10).map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`flex ${msg.isAI ? 'justify-start' : 'justify-end'}`}
+                >
+                  <div
+                    className={`max-w-[80%] px-4 py-3 rounded-2xl ${
+                      msg.isAI
+                        ? 'bg-purple-600/90 text-white rounded-bl-sm'
+                        : 'bg-blue-600/90 text-white rounded-br-sm'
+                    } backdrop-blur-sm border ${
+                      msg.isAI ? 'border-purple-400/30' : 'border-blue-400/30'
+                    }`}
+                  >
+                    <div className="font-semibold text-xs mb-1 opacity-80">
+                      {msg.isAI ? 'Tanaki' : 'You'}
+                    </div>
+                    <div className="text-sm md:text-base">{msg.text}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        
+        {/* Chat Input */}
+        <div className="bg-black/40 backdrop-blur-md rounded-2xl p-4 border border-white/10">
+          <div className="max-w-2xl mx-auto">
+            <div className="sr-only" aria-live="polite">
+              {liveText}
+            </div>
+            <ChatInput
+              disabled={!connected}
+              onUserGesture={unlockOnce}
+              onSend={handleSend}
+              placeholder="Message Tanaki..."
+            />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-function ModelLoadingOverlay() {
-  const { active, progress, item, total } = useProgress();
+function ModelLoadingOverlay({ active, progress }: { active: boolean; progress: number }) {
   const [simulatedProgress, setSimulatedProgress] = useState(0);
-  const simulationRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const hasRealProgress = total > 0;
+  const simulationRef = useRef<any>(null);
 
   useEffect(() => {
     if (!active) {
       setSimulatedProgress(0);
       if (simulationRef.current) {
         clearInterval(simulationRef.current);
-        simulationRef.current = null;
-      }
-      return;
-    }
-
-    if (hasRealProgress) {
-      if (simulationRef.current) {
-        clearInterval(simulationRef.current);
-        simulationRef.current = null;
       }
       return;
     }
@@ -289,81 +266,37 @@ function ModelLoadingOverlay() {
     simulationRef.current = setInterval(() => {
       setSimulatedProgress((prev) => {
         const remaining = 90 - prev;
-        if (remaining <= 0) return prev;
-        return prev + remaining * 0.08;
+        return remaining <= 0 ? prev : prev + remaining * 0.08;
       });
     }, 100);
 
     return () => {
       if (simulationRef.current) {
         clearInterval(simulationRef.current);
-        simulationRef.current = null;
       }
     };
-  }, [active, hasRealProgress]);
+  }, [active]);
 
-  if (!active || progress >= 100) return null;
-
-  const pct = hasRealProgress
-    ? Math.max(0, Math.min(100, Math.round(progress)))
-    : Math.max(0, Math.min(100, Math.round(simulatedProgress)));
-
-  const label =
-    typeof item === "string" && item.length > 0
-      ? `Loading ${item.split("/").slice(-1)[0]}…`
-      : "Loading 3D model…";
+  const pct = Math.max(0, Math.min(100, Math.round(simulatedProgress)));
 
   return (
-    <div
-      aria-live="polite"
-      style={{
-        position: "absolute",
-        inset: 0,
-        zIndex: 40,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        pointerEvents: "none",
-      }}
-    >
-      <Box
-        style={{
-          width: "min(520px, 92vw)",
-          background: "rgba(0,0,0,0.72)",
-          border: "1px solid rgba(255,255,255,0.12)",
-          borderRadius: 14,
-          padding: 16,
-          backdropFilter: "blur(10px)",
-        }}
-      >
-        <Flex justify="between" align="center" gap="3">
-          <Text size="2" color="gray">
-            {label}
-          </Text>
-          <Text size="2" color="gray">
-            {pct}%
-          </Text>
-        </Flex>
-
-        <div
-          style={{
-            height: 10,
-            borderRadius: 999,
-            marginTop: 10,
-            background: "rgba(255,255,255,0.10)",
-            overflow: "hidden",
-          }}
-        >
-          <div
-            style={{
-              height: "100%",
-              width: `${pct}%`,
-              background: "rgba(34,197,94,0.9)",
-              transition: "width 120ms linear",
-            }}
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-white">
+      <Lottie 
+        animationData={loadingAnimation} 
+        className="w-64 h-64 sm:w-80 sm:h-80" 
+      />
+      <div className="w-64 sm:w-80 mt-4">
+        <div className="flex justify-between text-sm text-gray-600 mb-2">
+          <span>Loading model...</span>
+          <span>{pct}%</span>
+        </div>
+        <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+          <div 
+            className="h-full bg-gradient-to-r from-cyan-500 to-purple-500 transition-all duration-200"
+            style={{ width: `${pct}%` }}
           />
         </div>
-      </Box>
+      </div>
     </div>
   );
 }
