@@ -93,28 +93,43 @@ function TanakiExperience() {
   /* -------------------------------------------------- */
 
 useEffect(() => {
-  const aiEvents = events.filter(
-    (e) => e._kind === "interactionRequest" && e.action === "says"
-  );
+  const onInteraction = (e: any) => {
+    if (e?._kind !== "interactionRequest") return;
+    if (e?.action !== "says") return;
 
-  setMessages((prev) => {
-    const existingIds = new Set(prev.map((m) => m.id));
+    console.log("[AI Event Received]", e); // ✅ logs the raw event
 
-    const newMessages = aiEvents
-      .filter((e) => !existingIds.has(e._id))
-      .map((e) => ({
+    setMessages((prev) => {
+      if (prev.some((m) => m.id === e._id)) {
+        console.log("[Duplicate message ignored]", e._id);
+        return prev;
+      }
+
+      const newMsg = {
         id: e._id,
         text: e.content,
         isAI: true,
         timestamp: normalizeTimestamp(e._timestamp),
-      }));
+      };
 
-    return newMessages.length > 0 ? [...prev, ...newMessages] : prev;
-  });
+      console.log("[New AI message added]", newMsg);
 
-  const latest = aiEvents.at(-1);
-  if (latest) setLiveText(latest.content);
-}, [events]); 
+      return [...prev, newMsg];
+    });
+
+    console.log("[Live text updated]", e.content);
+    setLiveText(e.content);
+  };
+
+  soul.on("interactionRequest", onInteraction);
+
+  console.log("✅ AI listener attached");
+
+  return () => {
+    soul.off("interactionRequest", onInteraction);
+    console.log("❌ AI listener removed");
+  };
+}, [soul]);
 
 
   /* -------------------------------------------------- */
