@@ -9,7 +9,7 @@ import { SoulEngineProvider } from "@opensouls/react";
 import { VisuallyHidden } from "@radix-ui/themes";
 import { useProgress } from "@react-three/drei";
 import Lottie from "lottie-react";
-import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Tanaki3DExperience } from "./3d/Tanaki3DExperience";
 
 // Import icons
@@ -66,11 +66,98 @@ function TanakiExperience() {
   const [isMuted, setIsMuted] = useState(false);
   const [userMessages, setUserMessages] = useState<{id: string, text: string, timestamp: Date}[]>([]);
 
+  // Speech recognition state
+  const [recognition, setRecognition] = useState<SpeechRecognition | null>(null);
+  const [interimTranscript, setInterimTranscript] = useState("");
+  const [finalTranscript, setFinalTranscript] = useState("");
+
   // Update now timestamp every 200ms (same as FloatingBubbles logic)
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 200);
     return () => window.clearInterval(id);
   }, []);
+
+  // Initialize speech recognition
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      console.warn("Speech recognition not supported in this browser");
+      return;
+    }
+
+    const recognitionInstance = new SpeechRecognition();
+    recognitionInstance.continuous = true;
+    recognitionInstance.interimResults = true;
+    recognitionInstance.lang = 'en-US';
+
+    recognitionInstance.onstart = () => {
+      console.log("Speech recognition started");
+      setIsRecording(true);
+    };
+
+    recognitionInstance.onresult = (event) => {
+      let interim = '';
+      let final = '';
+      
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          final += transcript;
+        } else {
+          interim += transcript;
+        }
+      }
+      
+      if (interim) {
+        setInterimTranscript(interim);
+      }
+      
+      if (final) {
+        setFinalTranscript(prev => prev + final + ' ');
+        setInterimTranscript('');
+      }
+    };
+
+    recognitionInstance.onerror = (event) => {
+      console.error("Speech recognition error:", event.error);
+      setIsRecording(false);
+    };
+
+    recognitionInstance.onend = () => {
+      console.log("Speech recognition ended");
+      setIsRecording(false);
+    };
+
+    setRecognition(recognitionInstance);
+
+    return () => {
+      if (recognitionInstance) {
+        recognitionInstance.stop();
+      }
+    };
+  }, []);
+
+  const toggleVoiceRecording = () => {
+    if (!recognition) {
+      alert("Speech recognition is not supported in your browser. Please use Chrome or Edge.");
+      return;
+    }
+
+    if (isRecording) {
+      recognition.stop();
+      setIsRecording(false);
+      // If we have final transcript, use it
+      if (finalTranscript.trim()) {
+        // This will be handled by the handleSendMessage function
+      }
+    } else {
+      setFinalTranscript("");
+      setInterimTranscript("");
+      recognition.start();
+    }
+  };
 
   const unlockOnce = useCallback(() => {
     if (unlockedOnceRef.current) return;
@@ -80,7 +167,7 @@ function TanakiExperience() {
 
   // Filter events with the SAME logic as FloatingBubbles (14 seconds TTL)
   const recentEvents = useMemo(() => {
-    const baseDurationMs = 20000; // 14 seconds - SAME as FloatingBubbles
+    const baseDurationMs = 14000; // 10 seconds - adjusted for chat
     
     const relevant = events.filter((e) => {
       if (e._kind === "perception") return !e.internal && e.action === "said";
@@ -88,7 +175,7 @@ function TanakiExperience() {
       return false;
     });
 
-    // Only show events from the last 14 seconds
+    // Only show events from the last 10 seconds
     return relevant.filter((e) => now - e._timestamp >= 0 && now - e._timestamp < baseDurationMs);
   }, [events, now]);
 
@@ -188,9 +275,19 @@ function TanakiExperience() {
     await send(text);
   };
 
-  // Filter user messages to only show recent ones (14 seconds)
+  // Handle voice input
+  const handleVoiceMessage = async () => {
+    const textToSend = finalTranscript.trim() || interimTranscript.trim();
+    if (textToSend) {
+      await handleSendMessage(textToSend);
+      setFinalTranscript("");
+      setInterimTranscript("");
+    }
+  };
+
+  // Filter user messages to only show recent ones (10 seconds)
   const recentUserMessages = useMemo(() => {
-    const baseDurationMs = 14000; // 14 seconds - SAME as events
+    const baseDurationMs = 10000; // 10 seconds - same as events
     return userMessages.filter(msg => 
       now - msg.timestamp.getTime() >= 0 && now - msg.timestamp.getTime() < baseDurationMs
     );
@@ -367,7 +464,7 @@ function TanakiExperience() {
         {/* Chat Interface */}
         <div
           ref={overlayRef}
-          className="w-full md:w-[480px] h-[55vh] md:h-[75vh] flex flex-col bg-gradient-to-br from-gray-900/10 to-cyan-900/10 p-5 rounded-3xl shadow-2xl border border-cyan-500/20 pointer-events-auto fixed bottom-0 left-0 md:relative md:bottom-auto md:left-auto mobile-chat"
+          className="w-full md:w-[480px] h-[55vh] md:h-[75vh] flex flex-col bg-gradient-to-br from-gray-900/10 to-cyan-900/10 p-5 rounded-3xl shadow-2xl border border-cyan-500/20 pointer-events-auto fixed bottom-0 left-0 md:relative md:bottom-auto md:left-auto mobile-chat chat-container"
           style={{ pointerEvents: "auto" as const }}
         >
           <div className="flex items-center justify-between p-4 rounded-2xl bg-gradient-to-r from-cyan-500/10 to-purple-500/10 border border-cyan-500/20 shadow-inner">
@@ -383,7 +480,7 @@ function TanakiExperience() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 rounded-2xl bg-black/10 border border-cyan-500/10 shadow-inner mt-3">
+          <div className="flex-1 overflow-y-auto p-4 rounded-2xl bg-black/10 border border-cyan-500/10 shadow-inner mt-3 chat-messages">
             {[...recentUserMessages, ...recentEvents
               .filter(e => e._kind === "interactionRequest" && e.action === "says" && e.content)
               .map(event => ({
@@ -430,11 +527,50 @@ function TanakiExperience() {
             {recentUserMessages.length === 0 && 
              recentEvents.filter(e => e._kind === "interactionRequest" && e.action === "says").length === 0 && (
               <div className="text-center py-8 text-cyan-300/50">
-                <div className="text-lg mb-2">Start a conversation with MEILIN</div>
-                <div className="text-sm">Ask anything and get AI-powered responses</div>
+                <div className="text-lg mb-2"></div>
+                <div className="text-sm"></div>
               </div>
             )}
           </div>
+
+          {/* Voice Input Indicator */}
+{isRecording && (
+  <div className="mb-3 p-3 rounded-xl bg-gradient-to-r from-cyan-500/20 to-purple-500/20 border border-cyan-500/30">
+    <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center gap-2">
+        <div className="w-2 h-2 sm:w-3 sm:h-3 bg-red-400 rounded-full"></div>
+        <strong className="text-cyan-300 text-xs sm:text-sm">LISTENING...</strong>
+      </div>
+    </div>
+    
+    <div className="mt-2 text-cyan-200 text-xs sm:text-sm">
+      {finalTranscript && <div className="mb-1 break-words">{finalTranscript}</div>}
+      {interimTranscript && <div className="italic text-cyan-300/70 break-words">{interimTranscript}</div>}
+      {!finalTranscript && !interimTranscript && (
+        <div className="italic text-cyan-300/50">Speak now...</div>
+      )}
+    </div>
+    
+    <div className="flex gap-0.5 sm:gap-1 mt-2 sm:mt-3 mb-2">
+      <div className="w-0.5 h-3 sm:w-1 sm:h-4 bg-cyan-400 rounded-full"></div>
+      <div className="w-0.5 h-3 sm:w-1 sm:h-4 bg-purple-400 rounded-full"></div>
+      <div className="w-0.5 h-3 sm:w-1 sm:h-4 bg-cyan-400 rounded-full"></div>
+      <div className="w-0.5 h-3 sm:w-1 sm:h-4 bg-purple-400 rounded-full"></div>
+    </div>
+    
+    {(finalTranscript.trim() || interimTranscript.trim()) && (
+      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-cyan-500/20">
+        <button
+          onClick={handleVoiceMessage}
+          className="w-full px-2 py-1.5 sm:px-3 sm:py-2.5 rounded-lg bg-gradient-to-r from-cyan-500/40 to-purple-500/40 hover:from-cyan-500/50 hover:to-purple-500/50 border border-cyan-400/50 text-cyan-100 hover:text-white transition-all duration-300 text-xs sm:text-sm font-medium shadow-lg hover:shadow-cyan-500/40 pointer-events-auto flex items-center justify-center gap-1 sm:gap-2"
+        >
+          <span className="text-xs sm:text-sm">📤</span>
+          <span className="whitespace-nowrap">SEND VOICE MESSAGE</span>
+        </button>
+      </div>
+    )}
+  </div>
+)}
 
           {/* Chat Input */}
           <div className="mt-4">
@@ -442,20 +578,25 @@ function TanakiExperience() {
               disabled={!connected}
               onUserGesture={unlockOnce}
               isRecording={isRecording}
-              onVoiceClick={() => setIsRecording(!isRecording)}
+              onVoiceClick={toggleVoiceRecording}
               onSend={handleSendMessage}
               placeholder="Type your message..."
+              // Pass voice transcription state if you want to modify ChatInput
+              voiceTranscript={finalTranscript || interimTranscript}
             />
           </div>
         </div>
 
         {/* Mute Button */}
-        <button
-          onClick={toggleMute}
-          className="fixed bottom-6 right-6 z-20 p-3 rounded-2xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/30 text-cyan-300 hover:text-cyan-100 transition-all duration-300 shadow-lg hover:shadow-cyan-500/25 pointer-events-auto"
-        >
-          {isMuted ? "🔇" : "🔊"}
-        </button>
+      <button
+  onClick={toggleMute}
+  className="fixed top-52 right-6 z-20 p-3 rounded-2xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/30 text-cyan-300 hover:text-cyan-100 transition-all duration-300 shadow-lg hover:shadow-cyan-500/25 pointer-events-auto sm:top-auto sm:bottom-6"
+>
+  {isMuted ? "🔇" : "🔊"}
+</button>
+
+        {/* Voice Send Button (only shown when we have voice transcript) */}
+
 
         <VisuallyHidden>
           <div aria-live="polite" aria-atomic="true">
@@ -474,22 +615,62 @@ function TanakiExperience() {
             }
           }
           
-          ::-webkit-scrollbar {
-            width: 6px;
+          /* Custom scrollbar styling */
+          .chat-messages::-webkit-scrollbar {
+            width: 8px;
           }
           
-          ::-webkit-scrollbar-track {
-            background: rgba(6, 182, 212, 0.1);
+          .chat-messages::-webkit-scrollbar-track {
+            background: linear-gradient(to bottom, 
+              rgba(6, 182, 212, 0.1) 0%, 
+              rgba(147, 51, 234, 0.1) 100%
+            );
             border-radius: 10px;
           }
           
-          ::-webkit-scrollbar-thumb {
-            background: rgba(6, 182, 212, 0.4);
+          .chat-messages::-webkit-scrollbar-thumb {
+            background: linear-gradient(to bottom, 
+              #06b6d4 0%, 
+              #9333ea 100%
+            );
             border-radius: 10px;
+            border: 2px solid rgba(255, 255, 255, 0.1);
           }
           
-          ::-webkit-scrollbar-thumb:hover {
-            background: rgba(6, 182, 212, 0.6);
+          .chat-messages::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(to bottom, 
+              #0ea5e9 0%, 
+              #a855f7 100%
+            );
+            box-shadow: 0 0 10px rgba(34, 211, 238, 0.5);
+          }
+          
+          /* For Firefox */
+          .chat-messages {
+            scrollbar-width: thin;
+            scrollbar-color: #06b6d4 rgba(6, 182, 212, 0.1);
+          }
+          
+          /* Animated scrollbar */
+          .chat-messages::-webkit-scrollbar-thumb {
+            background: linear-gradient(45deg, 
+              #06b6d4 0%, 
+              #9333ea 25%, 
+              #06b6d4 50%, 
+              #9333ea 75%, 
+              #06b6d4 100%
+            );
+            background-size: 200% 100%;
+            animation: scrollbarGradient 3s linear infinite;
+          }
+          
+          @keyframes scrollbarGradient {
+            0% {
+              background-position: 200% 0;
+            }
+            100% {
+              background-position: 0 0;
+            }
           }
         `}</style>
 
@@ -498,6 +679,27 @@ function TanakiExperience() {
           
           .hover\\:drop-shadow-glow:hover {
             filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.6));
+          }
+          
+          /* Global scrollbar styling for the entire app */
+          ::-webkit-scrollbar {
+            width: 10px;
+          }
+          
+          ::-webkit-scrollbar-track {
+            background: rgba(6, 182, 212, 0.05);
+            backdrop-filter: blur(10px);
+          }
+          
+          ::-webkit-scrollbar-thumb {
+            background: linear-gradient(45deg, #06b6d4, #9333ea);
+            border-radius: 10px;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+          }
+          
+          ::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(45deg, #0ea5e9, #a855f7);
+            box-shadow: 0 0 15px rgba(34, 211, 238, 0.5);
           }
         `}</style>
       </div>
