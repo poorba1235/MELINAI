@@ -4,16 +4,38 @@ import loadingAnimation from "@/../public/loading.json";
 import { ChatInput } from "@/components/ChatInput";
 import { TanakiAudio } from "@/components/TanakiAudio";
 import { useTanakiSoul } from "@/hooks/useTanakiSoul";
-import { base64ToUint8 } from "@/utils/base64";
 import { SoulEngineProvider } from "@opensouls/react";
 import { VisuallyHidden } from "@radix-ui/themes";
 import { useProgress } from "@react-three/drei";
 import Lottie from "lottie-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Tanaki3DExperience } from "./3d/Tanaki3DExperience";
-
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 // Import icons
 import { Cpu, Home, Menu, Settings, Users, Zap } from "lucide-react";
+
+
+const elevenLabsApiKey = '16a6522513845dac5246b8f5e9edf8ff92ea01a45588569a8119cb0abc1af532';
+const elevenVoiceId = "piI8Kku0DcvcL6TTSeQt"; // Your chosen ElevenLabs voice
+const elevenLabsClient = new ElevenLabsClient({ apiKey: elevenLabsApiKey });
+
+async function speakTextWithElevenLabs(text: string) {
+  if (!text.trim()) return;
+  try {
+    const stream = await elevenLabsClient.textToSpeech.convert(elevenVoiceId, {
+      modelId: "eleven_multilingual_v2",
+      text,
+    });
+
+    const response = new Response(stream as any); // TS fix for ReadableStream
+    const audioBlob = await response.blob();
+    const audioUrl = URL.createObjectURL(audioBlob);
+    const audio = new Audio(audioUrl);
+    audio.play();
+  } catch (err) {
+    console.error("ElevenLabs TTS error:", err);
+  }
+}
 
 function readBoolEnv(value: unknown, fallback: boolean): boolean {
   if (typeof value !== "string") return fallback;
@@ -188,56 +210,58 @@ function TanakiExperience() {
     if (lastSpokenIdRef.current === latest._id) return;
     lastSpokenIdRef.current = latest._id;
     setLiveText(latest.content);
+    void speakTextWithElevenLabs(latest.content);
+
   }, [recentEvents.length, recentEvents[recentEvents.length - 1]?.content]);
 
   // Listen for Soul Engine ephemeral audio events (useTTS) - EXACT from working code
-  useEffect(() => {
-    const onChunk = (evt: any) => {
-      const data = evt?.data as any;
-      if (!data || typeof data !== "object") return;
+  // useEffect(() => {
+  //   const onChunk = (evt: any) => {
+  //     const data = evt?.data as any;
+  //     if (!data || typeof data !== "object") return;
 
-      const streamId = typeof data.streamId === "string" ? data.streamId : null;
-      const chunkBase64 = typeof data.chunkBase64 === "string" ? data.chunkBase64 : null;
-      if (!streamId || !chunkBase64) return;
+  //     const streamId = typeof data.streamId === "string" ? data.streamId : null;
+  //     const chunkBase64 = typeof data.chunkBase64 === "string" ? data.chunkBase64 : null;
+  //     if (!streamId || !chunkBase64) return;
 
-      // If a new stream starts, interrupt queued audio so it feels responsive.
-      if (activeTtsStreamIdRef.current !== streamId) {
-        activeTtsStreamIdRef.current = streamId;
-        audioRef.current?.interrupt();
-      }
+  //     // If a new stream starts, interrupt queued audio so it feels responsive.
+  //     if (activeTtsStreamIdRef.current !== streamId) {
+  //       activeTtsStreamIdRef.current = streamId;
+  //       audioRef.current?.interrupt();
+  //     }
 
-      try {
-        const bytes = base64ToUint8(chunkBase64);
-        audioRef.current?.enqueuePcm16(bytes);
-      } catch (err) {
-        console.error("Failed to decode/enqueue TTS chunk:", err);
-      }
-    };
+  //     try {
+  //       const bytes = base64ToUint8(chunkBase64);
+  //       audioRef.current?.enqueuePcm16(bytes);
+  //     } catch (err) {
+  //       console.error("Failed to decode/enqueue TTS chunk:", err);
+  //     }
+  //   };
 
-    const onComplete = (evt: any) => {
-      const data = evt?.data as any;
-      const streamId = typeof data?.streamId === "string" ? data.streamId : null;
-      if (!streamId) return;
-      if (activeTtsStreamIdRef.current === streamId) {
-        activeTtsStreamIdRef.current = null;
-      }
-    };
+  //   const onComplete = (evt: any) => {
+  //     const data = evt?.data as any;
+  //     const streamId = typeof data?.streamId === "string" ? data.streamId : null;
+  //     if (!streamId) return;
+  //     if (activeTtsStreamIdRef.current === streamId) {
+  //       activeTtsStreamIdRef.current = null;
+  //     }
+  //   };
 
-    const onError = (evt: any) => {
-      const data = evt?.data as any;
-      const message = typeof data?.message === "string" ? data.message : "unknown error";
-      console.error("TTS error event:", message, evt);
-    };
+  //   const onError = (evt: any) => {
+  //     const data = evt?.data as any;
+  //     const message = typeof data?.message === "string" ? data.message : "unknown error";
+  //     console.error("TTS error event:", message, evt);
+  //   };
 
-    soul.on("ephemeral:audio-chunk", onChunk);
-    soul.on("ephemeral:audio-complete", onComplete);
-    soul.on("ephemeral:audio-error", onError);
-    return () => {
-      soul.off("ephemeral:audio-chunk", onChunk);
-      soul.off("ephemeral:audio-complete", onComplete);
-      soul.off("ephemeral:audio-error", onError);
-    };
-  }, [soul]);
+  //   soul.on("ephemeral:audio-chunk", onChunk);
+  //   soul.on("ephemeral:audio-complete", onComplete);
+  //   soul.on("ephemeral:audio-error", onError);
+  //   return () => {
+  //     soul.off("ephemeral:audio-chunk", onChunk);
+  //     soul.off("ephemeral:audio-complete", onComplete);
+  //     soul.off("ephemeral:audio-error", onError);
+  //   };
+  // }, [soul]);
 
   // Measure the bottom overlay - EXACT from working code
   useEffect(() => {
