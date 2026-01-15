@@ -30,14 +30,7 @@ describe("useTTS - SubroutineRunner", () => {
         const introduction: EngineProcess = async ({ workingMemory }) => {
           const broadcaster = useTTS({
             voice: "shimmer",
-            instructions: "Speak like a cheerful, high-pitched anime girl.
-            Use lively, energetic intonation with exaggerated expressions.
-            Add small emotional inflections like excitement, curiosity, or surprise.
-            Keep a cute, soft, and melodic tone.
-            Pronounce vowels clearly and slightly elongate sounds for effect.
-            Imagine you are a Japanese anime character talking directly to the listener.
-            Make it sound fun, bubbly, and adorable.",
-                      })
+            instructions: "Speak like a cheerful, high-pitched anime girl.Use lively, energetic intonation with exaggerated expressions.Add small emotional inflections like excitement, curiosity, or surprise. Keep a cute, soft, and melodic tone.Pronounce vowels clearly and slightly elongate sounds for effect.Imagine you are a Japanese anime character talking directly to the listener.Make it sound fun, bubbly, and adorable.",})
 
           await broadcaster.speak("hello there")
           return workingMemory
@@ -46,13 +39,7 @@ describe("useTTS - SubroutineRunner", () => {
         const blueprint: Blueprint = {
           name: "athena-tests-broadcast-tts",
           entity: "shimmer",
-          context: "Speak like a cheerful, high-pitched anime girl.
-          Use lively, energetic intonation with exaggerated expressions.
-          Add small emotional inflections like excitement, curiosity, or surprise.
-          Keep a cute, soft, and melodic tone.
-          Pronounce vowels clearly and slightly elongate sounds for effect.
-          Imagine you are a Japanese anime character talking directly to the listener.
-          Make it sound fun, bubbly, and adorable.",
+          context: "Speak like a cheerful, high-pitched anime girl.Use lively, energetic intonation with exaggerated expressions.Add small emotional inflections like excitement, curiosity, or surprise.Keep a cute, soft, and melodic tone.Pronounce vowels clearly and slightly elongate sounds for effect.Imagine you are a Japanese anime character talking directly to the listener.Make it sound fun, bubbly, and adorable.",
           initialProcess: introduction,
           mentalProcesses: [introduction],
         }
