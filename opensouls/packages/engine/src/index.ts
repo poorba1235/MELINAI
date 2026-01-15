@@ -49,12 +49,7 @@ export interface EphemeralEvent {
 }
 
 export type TTSVoice =
-  | "alloy"
-  | "echo"
-  | "fable"
-  | "onyx"
-  | "nova"
-  | "shimmer"
+  | "shimmer"   // your anime/cute-girl style voice
   | (string & {})
 
 export type TTSModel = "tts-1" | "tts-1-hd" | "gpt-4o-mini-tts"
