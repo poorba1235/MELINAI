@@ -183,11 +183,11 @@ function TanakiExperience() {
     }
   };
 
-  // const unlockOnce = useCallback(() => {
-  //   if (unlockedOnceRef.current) return;
-  //   unlockedOnceRef.current = true;
-  //   void audioRef.current?.unlock();
-  // }, []);
+  const unlockOnce = useCallback(() => {
+    if (unlockedOnceRef.current) return;
+    unlockedOnceRef.current = true;
+
+  }, []);
 
   // Filter events with the SAME logic as FloatingBubbles (14 seconds TTL)
   const recentEvents = useMemo(() => {
