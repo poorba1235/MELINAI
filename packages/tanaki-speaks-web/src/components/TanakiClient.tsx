@@ -2,7 +2,6 @@
 
 import loadingAnimation from "@/../public/loading.json";
 import { ChatInput } from "@/components/ChatInput";
-import { TanakiAudio } from "@/components/TanakiAudio";
 import { useTanakiSoul } from "@/hooks/useTanakiSoul";
 import { SoulEngineProvider } from "@opensouls/react";
 import { VisuallyHidden } from "@radix-ui/themes";
@@ -14,28 +13,76 @@ import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 // Import icons
 import { Cpu, Home, Menu, Settings, Users, Zap } from "lucide-react";
 
-
+// ElevenLabs Configuration
 const elevenLabsApiKey = '16a6522513845dac5246b8f5e9edf8ff92ea01a45588569a8119cb0abc1af532';
 const elevenVoiceId = "piI8Kku0DcvcL6TTSeQt"; // Your chosen ElevenLabs voice
 const elevenLabsClient = new ElevenLabsClient({ apiKey: elevenLabsApiKey });
 
-async function speakTextWithElevenLabs(text: string) {
+// ElevenLabs TTS Function
+async function speakTextWithElevenLabs(text: string, onStart?: () => void, onEnd?: () => void) {
   if (!text.trim()) return;
+  
   try {
-    const stream = await elevenLabsClient.textToSpeech.convert(elevenVoiceId, {
+    onStart?.();
+    
+    const audioResponse = await elevenLabsClient.textToSpeech.convert(elevenVoiceId, {
       modelId: "eleven_multilingual_v2",
-      text,
+      text: text,
+      outputFormat: "mp3_44100_128",
+      voiceSettings: {
+        stability: 0.7,
+        similarityBoost: 0.8,
+        style: 0.3,
+        useSpeakerBoost: true
+      }
     });
 
-    const response = new Response(stream as any); // TS fix for ReadableStream
-    console.log(response);
-    const audioBlob = await response.blob();
-    const audioUrl = URL.createObjectURL(audioBlob);
-    const audio = new Audio(audioUrl);
-    audio.play();
+    // Convert stream to audio
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const arrayBuffer = await audioResponse.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    
+    // Create audio source
+    const source = audioContext.createBufferSource();
+    source.buffer = audioBuffer;
+    
+    // Create gain node for volume control
+    const gainNode = audioContext.createGain();
+    
+    // Connect nodes
+    source.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    
+    // Store reference to control playback
+    const audioControl = {
+      source,
+      gainNode,
+      context: audioContext,
+      isPlaying: true,
+      stop: () => {
+        source.stop();
+        audioControl.isPlaying = false;
+      },
+      setVolume: (volume: number) => {
+        gainNode.gain.value = volume;
+      }
+    };
+    
+    // Play audio
+    source.start(0);
+    
+    // Handle end of playback
+    source.onended = () => {
+      audioControl.isPlaying = false;
+      onEnd?.();
+    };
+    
+    return audioControl;
     
   } catch (err) {
     console.error("ElevenLabs TTS error:", err);
+    onEnd?.();
+    return null;
   }
 }
 
@@ -72,11 +119,7 @@ export default function TanakiClient() {
 }
 
 function TanakiExperience() {
-  // EXACTLY same as working code
   const { connected, events, send, connectedUsers, soul } = useTanakiSoul();
-  const audioRef = useRef<TanakiAudioHandle | null>(null);
-  const lastSpokenIdRef = useRef<string | null>(null);
-  const activeTtsStreamIdRef = useRef<string | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const [blend, setBlend] = useState(0);
   const unlockedOnceRef = useRef(false);
@@ -84,18 +127,19 @@ function TanakiExperience() {
   const [liveText, setLiveText] = useState("");
   const [now, setNow] = useState(() => Date.now());
 
-  // UI state for your design
+  // UI state
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [userMessages, setUserMessages] = useState<{id: string, text: string, timestamp: Date}[]>([]);
+  const [currentAudio, setCurrentAudio] = useState<any>(null);
 
   // Speech recognition state
   const [recognition, setRecognition] = useState<SpeechRecognition | null>(null);
   const [interimTranscript, setInterimTranscript] = useState("");
   const [finalTranscript, setFinalTranscript] = useState("");
 
-  // Update now timestamp every 200ms (same as FloatingBubbles logic)
+  // Update now timestamp every 200ms
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 200);
     return () => window.clearInterval(id);
@@ -172,10 +216,6 @@ function TanakiExperience() {
     if (isRecording) {
       recognition.stop();
       setIsRecording(false);
-      // If we have final transcript, use it
-      if (finalTranscript.trim()) {
-        // This will be handled by the handleSendMessage function
-      }
     } else {
       setFinalTranscript("");
       setInterimTranscript("");
@@ -186,12 +226,11 @@ function TanakiExperience() {
   const unlockOnce = useCallback(() => {
     if (unlockedOnceRef.current) return;
     unlockedOnceRef.current = true;
-
   }, []);
 
   // Filter events with the SAME logic as FloatingBubbles (14 seconds TTL)
   const recentEvents = useMemo(() => {
-    const baseDurationMs = 14000; // 10 seconds - adjusted for chat
+    const baseDurationMs = 14000; // 14 seconds
     
     const relevant = events.filter((e) => {
       if (e._kind === "perception") return !e.internal && e.action === "said";
@@ -199,73 +238,54 @@ function TanakiExperience() {
       return false;
     });
 
-    // Only show events from the last 10 seconds
+    // Only show events from the last 14 seconds
     return relevant.filter((e) => now - e._timestamp >= 0 && now - e._timestamp < baseDurationMs);
   }, [events, now]);
 
-  // When Tanaki says something new, update aria-live text
+  // When Tanaki says something new, trigger ElevenLabs TTS
   useEffect(() => {
     const latest = [...recentEvents]
       .reverse()
       .find((e) => e._kind === "interactionRequest" && e.action === "says");
+    
     if (!latest) return;
-    if (lastSpokenIdRef.current === latest._id) return;
-    lastSpokenIdRef.current = latest._id;
+    
+    // Avoid repeating the same message
+    if (liveText === latest.content) return;
+    
     setLiveText(latest.content);
-    void speakTextWithElevenLabs(latest.content);
+    
+    // Stop current audio if playing
+    if (currentAudio?.isPlaying) {
+      currentAudio.stop();
+    }
+    
+    // Speak with ElevenLabs
+    if (!isMuted && latest.content.trim()) {
+      const audioControl = speakTextWithElevenLabs(
+        latest.content,
+        () => {
+          // On audio start
+          console.log("ElevenLabs audio started");
+        },
+        () => {
+          // On audio end
+          console.log("ElevenLabs audio ended");
+          setCurrentAudio(null);
+        }
+      );
+      
+      audioControl.then(control => {
+        if (control) {
+          // Set volume based on mute state
+          control.setVolume(isMuted ? 0 : 1);
+          setCurrentAudio(control);
+        }
+      });
+    }
+  }, [recentEvents, isMuted]);
 
-  }, [recentEvents.length, recentEvents[recentEvents.length - 1]?.content]);
-
-  // Listen for Soul Engine ephemeral audio events (useTTS) - EXACT from working code
-  // useEffect(() => {
-  //   const onChunk = (evt: any) => {
-  //     const data = evt?.data as any;
-  //     if (!data || typeof data !== "object") return;
-
-  //     const streamId = typeof data.streamId === "string" ? data.streamId : null;
-  //     const chunkBase64 = typeof data.chunkBase64 === "string" ? data.chunkBase64 : null;
-  //     if (!streamId || !chunkBase64) return;
-
-  //     // If a new stream starts, interrupt queued audio so it feels responsive.
-  //     if (activeTtsStreamIdRef.current !== streamId) {
-  //       activeTtsStreamIdRef.current = streamId;
-  //       audioRef.current?.interrupt();
-  //     }
-
-  //     try {
-  //       const bytes = base64ToUint8(chunkBase64);
-  //       audioRef.current?.enqueuePcm16(bytes);
-  //     } catch (err) {
-  //       console.error("Failed to decode/enqueue TTS chunk:", err);
-  //     }
-  //   };
-
-  //   const onComplete = (evt: any) => {
-  //     const data = evt?.data as any;
-  //     const streamId = typeof data?.streamId === "string" ? data.streamId : null;
-  //     if (!streamId) return;
-  //     if (activeTtsStreamIdRef.current === streamId) {
-  //       activeTtsStreamIdRef.current = null;
-  //     }
-  //   };
-
-  //   const onError = (evt: any) => {
-  //     const data = evt?.data as any;
-  //     const message = typeof data?.message === "string" ? data.message : "unknown error";
-  //     console.error("TTS error event:", message, evt);
-  //   };
-
-  //   soul.on("ephemeral:audio-chunk", onChunk);
-  //   soul.on("ephemeral:audio-complete", onComplete);
-  //   soul.on("ephemeral:audio-error", onError);
-  //   return () => {
-  //     soul.off("ephemeral:audio-chunk", onChunk);
-  //     soul.off("ephemeral:audio-complete", onComplete);
-  //     soul.off("ephemeral:audio-error", onError);
-  //   };
-  // }, [soul]);
-
-  // Measure the bottom overlay - EXACT from working code
+  // Measure the bottom overlay
   useEffect(() => {
     const el = overlayRef.current;
     if (!el) return;
@@ -285,7 +305,7 @@ function TanakiExperience() {
     };
   }, []);
 
-  // Simple send function - EXACT from working code
+  // Simple send function
   const handleSendMessage = async (text: string) => {
     if (!text.trim() || !connected) return;
     
@@ -299,28 +319,36 @@ function TanakiExperience() {
     
     unlockOnce();
     await send(text);
+    
+    // Clear transcripts after sending
+    setFinalTranscript("");
+    setInterimTranscript("");
   };
 
-  // Handle voice input
+  // Handle voice message sending
   const handleVoiceMessage = async () => {
     const textToSend = finalTranscript.trim() || interimTranscript.trim();
     if (textToSend) {
       await handleSendMessage(textToSend);
-      setFinalTranscript("");
-      setInterimTranscript("");
     }
   };
 
   // Filter user messages to only show recent ones (10 seconds)
   const recentUserMessages = useMemo(() => {
-    const baseDurationMs = 10000; // 10 seconds - same as events
+    const baseDurationMs = 10000; // 10 seconds
     return userMessages.filter(msg => 
       now - msg.timestamp.getTime() >= 0 && now - msg.timestamp.getTime() < baseDurationMs
     );
   }, [userMessages, now]);
 
   const toggleMute = () => {
-    setIsMuted(!isMuted);
+    const newMutedState = !isMuted;
+    setIsMuted(newMutedState);
+    
+    // Adjust volume of current audio if playing
+    if (currentAudio?.isPlaying) {
+      currentAudio.setVolume(newMutedState ? 0 : 1);
+    }
   };
 
   // Model loading
@@ -354,15 +382,6 @@ function TanakiExperience() {
         message={liveText ? { content: liveText, animation: "Action" } : null}
         chat={() => console.log("Chat triggered")}
       />
-      
-      {/* 🔊 Audio Component - EXACT from working code */}
-      {/* <TanakiAudio
-        ref={audioRef}
-        enabled={!isMuted}
-        onVolumeChange={(volume) => {
-          setBlend((prev) => prev * 0.5 + volume * 0.5);
-        }}
-      /> */}
 
       {/* UI Overlay */}
       <div
@@ -560,43 +579,43 @@ function TanakiExperience() {
           </div>
 
           {/* Voice Input Indicator */}
-{isRecording && (
-  <div className="mb-3 p-3 rounded-xl bg-gradient-to-r from-cyan-500/20 to-purple-500/20 border border-cyan-500/30">
-    <div className="flex items-center justify-between mb-2">
-      <div className="flex items-center gap-2">
-        <div className="w-2 h-2 sm:w-3 sm:h-3 bg-red-400 rounded-full"></div>
-        <strong className="text-cyan-300 text-xs sm:text-sm">LISTENING...</strong>
-      </div>
-    </div>
-    
-    <div className="mt-2 text-cyan-200 text-xs sm:text-sm">
-      {finalTranscript && <div className="mb-1 break-words">{finalTranscript}</div>}
-      {interimTranscript && <div className="italic text-cyan-300/70 break-words">{interimTranscript}</div>}
-      {!finalTranscript && !interimTranscript && (
-        <div className="italic text-cyan-300/50">Speak now...</div>
-      )}
-    </div>
-    
-    <div className="flex gap-0.5 sm:gap-1 mt-2 sm:mt-3 mb-2">
-      <div className="w-0.5 h-3 sm:w-1 sm:h-4 bg-cyan-400 rounded-full"></div>
-      <div className="w-0.5 h-3 sm:w-1 sm:h-4 bg-purple-400 rounded-full"></div>
-      <div className="w-0.5 h-3 sm:w-1 sm:h-4 bg-cyan-400 rounded-full"></div>
-      <div className="w-0.5 h-3 sm:w-1 sm:h-4 bg-purple-400 rounded-full"></div>
-    </div>
-    
-    {(finalTranscript.trim() || interimTranscript.trim()) && (
-      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-cyan-500/20">
-        <button
-          onClick={handleVoiceMessage}
-          className="w-full px-2 py-1.5 sm:px-3 sm:py-2.5 rounded-lg bg-gradient-to-r from-cyan-500/40 to-purple-500/40 hover:from-cyan-500/50 hover:to-purple-500/50 border border-cyan-400/50 text-cyan-100 hover:text-white transition-all duration-300 text-xs sm:text-sm font-medium shadow-lg hover:shadow-cyan-500/40 pointer-events-auto flex items-center justify-center gap-1 sm:gap-2"
-        >
-          <span className="text-xs sm:text-sm">📤</span>
-          <span className="whitespace-nowrap">SEND VOICE MESSAGE</span>
-        </button>
-      </div>
-    )}
-  </div>
-)}
+          {isRecording && (
+            <div className="mb-3 p-3 rounded-xl bg-gradient-to-r from-cyan-500/20 to-purple-500/20 border border-cyan-500/30">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 sm:w-3 sm:h-3 bg-red-400 rounded-full"></div>
+                  <strong className="text-cyan-300 text-xs sm:text-sm">LISTENING...</strong>
+                </div>
+              </div>
+              
+              <div className="mt-2 text-cyan-200 text-xs sm:text-sm">
+                {finalTranscript && <div className="mb-1 break-words">{finalTranscript}</div>}
+                {interimTranscript && <div className="italic text-cyan-300/70 break-words">{interimTranscript}</div>}
+                {!finalTranscript && !interimTranscript && (
+                  <div className="italic text-cyan-300/50">Speak now...</div>
+                )}
+              </div>
+              
+              <div className="flex gap-0.5 sm:gap-1 mt-2 sm:mt-3 mb-2">
+                <div className="w-0.5 h-3 sm:w-1 sm:h-4 bg-cyan-400 rounded-full"></div>
+                <div className="w-0.5 h-3 sm:w-1 sm:h-4 bg-purple-400 rounded-full"></div>
+                <div className="w-0.5 h-3 sm:w-1 sm:h-4 bg-cyan-400 rounded-full"></div>
+                <div className="w-0.5 h-3 sm:w-1 sm:h-4 bg-purple-400 rounded-full"></div>
+              </div>
+              
+              {(finalTranscript.trim() || interimTranscript.trim()) && (
+                <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-cyan-500/20">
+                  <button
+                    onClick={handleVoiceMessage}
+                    className="w-full px-2 py-1.5 sm:px-3 sm:py-2.5 rounded-lg bg-gradient-to-r from-cyan-500/40 to-purple-500/40 hover:from-cyan-500/50 hover:to-purple-500/50 border border-cyan-400/50 text-cyan-100 hover:text-white transition-all duration-300 text-xs sm:text-sm font-medium shadow-lg hover:shadow-cyan-500/40 pointer-events-auto flex items-center justify-center gap-1 sm:gap-2"
+                  >
+                    <span className="text-xs sm:text-sm">📤</span>
+                    <span className="whitespace-nowrap">SEND VOICE MESSAGE</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Chat Input */}
           <div className="mt-4">
@@ -607,22 +626,18 @@ function TanakiExperience() {
               onVoiceClick={toggleVoiceRecording}
               onSend={handleSendMessage}
               placeholder="Type your message..."
-              // Pass voice transcription state if you want to modify ChatInput
               voiceTranscript={finalTranscript || interimTranscript}
             />
           </div>
         </div>
 
         {/* Mute Button */}
-      <button
-  onClick={toggleMute}
-  className="fixed top-52 right-6 z-20 p-3 rounded-2xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/30 text-cyan-300 hover:text-cyan-100 transition-all duration-300 shadow-lg hover:shadow-cyan-500/25 pointer-events-auto sm:top-auto sm:bottom-6"
->
-  {isMuted ? "🔇" : "🔊"}
-</button>
-
-        {/* Voice Send Button (only shown when we have voice transcript) */}
-
+        <button
+          onClick={toggleMute}
+          className="fixed top-52 right-6 z-20 p-3 rounded-2xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/30 text-cyan-300 hover:text-cyan-100 transition-all duration-300 shadow-lg hover:shadow-cyan-500/25 pointer-events-auto sm:top-auto sm:bottom-6"
+        >
+          {isMuted ? "🔇" : "🔊"}
+        </button>
 
         <VisuallyHidden>
           <div aria-live="polite" aria-atomic="true">
