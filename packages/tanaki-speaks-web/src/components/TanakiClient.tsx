@@ -133,7 +133,10 @@ function TanakiExperience() {
   const [isRecording, setIsRecording] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [userMessages, setUserMessages] = useState<{id: string, text: string, timestamp: Date}[]>([]);
-  
+    // When AI responds, use ElevenLabs TTS
+  const lastProcessedResponseId = useRef<string | null>(null);
+  const lastProcessedContent = useRef<string | null>(null);
+
   // Audio state
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const pendingAudioRef = useRef<(() => Promise<any>) | null>(null);
@@ -249,9 +252,6 @@ function TanakiExperience() {
     }
   }, [audioUnlocked]);
 
-  // When AI responds, use ElevenLabs TTS
-const lastProcessedResponseId = useRef<string | null>(null);
-const lastProcessedContent = useRef<string | null>(null);
 
 useEffect(() => {
   const latest = [...recentEvents]
