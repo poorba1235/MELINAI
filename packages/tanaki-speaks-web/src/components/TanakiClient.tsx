@@ -33,8 +33,8 @@ async function speakTextWithElevenLabs(text: string) {
       elevenVoiceId,
       {
         text: text,
-        model_id: 'eleven_multilingual_v2',
-        output_format: 'mp3_44100_128',
+        modelId: 'eleven_multilingual_v2',
+        outputFormat: 'mp3_44100_128',
       }
     );
 
