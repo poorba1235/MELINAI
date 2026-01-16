@@ -14,7 +14,7 @@ import { Cpu, Home, Menu, Settings, Users, Zap } from "lucide-react";
 
 // ElevenLabs Configuration
 const elevenLabsApiKey = '6ebf8d95b473254e4ee217995637b17b71f3e8e7481ef1a3a8d5b49dd4fbd504';
-const elevenVoiceId = "JBFqnCBsd6RMkjVDRZzb";
+const elevenVoiceId = "cgSgspJ2msm6clMCkdW9";
 const elevenlabs = new ElevenLabsClient({
   apiKey: elevenLabsApiKey,
 });
@@ -250,40 +250,55 @@ function TanakiExperience() {
   }, [audioUnlocked]);
 
   // When AI responds, use ElevenLabs TTS
-  useEffect(() => {
-    const latest = [...recentEvents]
-      .reverse()
-      .find((e) => e._kind === "interactionRequest" && e.action === "says");
-    
-    if (!latest) return;
-    
-    const content = latest.content?.trim() || "Processing your request";
-    if (liveText === content) return;
-    
-    setLiveText(content);
-    
-    if (!isMuted && content) {
-      const playAudio = async () => {
-        const audioResult = await speakTextWithElevenLabs(
-          content,
-          () => {
-            // Audio needs user interaction
-            pendingAudioRef.current = async () => {
-              if (audioResult?.playAfterInteraction) {
-                await audioResult.playAfterInteraction();
-              }
-            };
-          }
-        );
-        
-        if (audioResult?.playAfterInteraction) {
-          pendingAudioRef.current = audioResult.playAfterInteraction;
+const lastProcessedResponseId = useRef<string | null>(null);
+const lastProcessedContent = useRef<string | null>(null);
+
+useEffect(() => {
+  const latest = [...recentEvents]
+    .reverse()
+    .find((e) => e._kind === "interactionRequest" && e.action === "says");
+  
+  if (!latest || !latest.content) return;
+  
+  const content = latest.content.trim();
+  
+  // Check if we've already processed this exact response
+  if (lastProcessedResponseId.current === latest._id) {
+    return;
+  }
+  
+  // Check if we're already showing this content
+  if (lastProcessedContent.current === content) {
+    return;
+  }
+  
+  // Update trackers
+  lastProcessedResponseId.current = latest._id;
+  lastProcessedContent.current = content;
+  
+  setLiveText(content);
+  
+  if (!isMuted && content) {
+    const playAudio = async () => {
+      const audioResult = await speakTextWithElevenLabs(
+        content,
+        () => {
+          pendingAudioRef.current = async () => {
+            if (audioResult?.playAfterInteraction) {
+              await audioResult.playAfterInteraction();
+            }
+          };
         }
-      };
+      );
       
-      playAudio();
-    }
-  }, [recentEvents, isMuted]);
+      if (audioResult?.playAfterInteraction) {
+        pendingAudioRef.current = audioResult.playAfterInteraction;
+      }
+    };
+    
+    playAudio();
+  }
+}, [recentEvents, isMuted]);
 
   // Measure overlay height
   useEffect(() => {
