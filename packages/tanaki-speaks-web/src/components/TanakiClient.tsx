@@ -22,6 +22,7 @@ const elevenlabs = new ElevenLabsClient({
 });
 
 // ElevenLabs TTS Function
+// ElevenLabs TTS Function - FIXED VERSION
 async function speakTextWithElevenLabs(text: string) {
   if (!text.trim()) return null;
   
@@ -38,8 +39,52 @@ async function speakTextWithElevenLabs(text: string) {
       }
     );
 
-    // Convert response to audio blob
-    const audioBlob = await audioResponse.blob();
+    // The response might be an ArrayBuffer or ReadableStream
+    // Let's handle different response types
+    let audioBlob: Blob;
+    
+    if (audioResponse instanceof ArrayBuffer) {
+      audioBlob = new Blob([audioResponse], { type: 'audio/mpeg' });
+    } else if (audioResponse instanceof ReadableStream) {
+      // Convert ReadableStream to ArrayBuffer
+      const reader = audioResponse.getReader();
+      const chunks = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      const arrayBuffer = new Uint8Array(chunks.reduce((acc, chunk) => acc + chunk.length, 0));
+      let offset = 0;
+      for (const chunk of chunks) {
+        arrayBuffer.set(chunk, offset);
+        offset += chunk.length;
+      }
+      audioBlob = new Blob([arrayBuffer], { type: 'audio/mpeg' });
+    } else if (audioResponse instanceof Blob) {
+      audioBlob = audioResponse;
+    } else if (typeof audioResponse === 'string') {
+      // If it's a base64 string
+      const binaryString = atob(audioResponse);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
+    } else {
+      // Try to convert whatever it is to ArrayBuffer
+      try {
+        const arrayBuffer = await audioResponse.arrayBuffer?.();
+        if (arrayBuffer) {
+          audioBlob = new Blob([arrayBuffer], { type: 'audio/mpeg' });
+        } else {
+          throw new Error('Unknown response type');
+        }
+      } catch {
+        throw new Error('Unable to process audio response');
+      }
+    }
+
     const audioUrl = URL.createObjectURL(audioBlob);
     
     // Create audio element
