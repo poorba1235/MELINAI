@@ -1,13 +1,13 @@
 import loadingAnimation from "@/../public/loading.json";
 import { ChatInput } from "@/components/ChatInput";
 import { useTanakiSoul } from "@/hooks/useTanakiSoul";
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 import { SoulEngineProvider } from "@opensouls/react";
 import { VisuallyHidden } from "@radix-ui/themes";
 import { useProgress } from "@react-three/drei";
 import Lottie from "lottie-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Tanaki3DExperience } from "./3d/Tanaki3DExperience";
-import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 // Import icons
 import { Cpu, Home, Menu, Settings, Users, Zap } from "lucide-react";
@@ -20,96 +20,103 @@ const elevenlabs = new ElevenLabsClient({
 });
 
 // PRODUCTION-READY ElevenLabs TTS Function
-// Updated ElevenLabs TTS Function with streaming
 async function speakTextWithElevenLabs(text: string, onUserInteractionRequired?: () => void) {
   const textToSpeak = text.trim() || "Processing your request";
   
   if (!textToSpeak) return null;
   
   try {
-    // Stream audio directly
-    const audioResponse = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${elevenVoiceId}/stream`,
+    // Get audio stream from ElevenLabs
+    const audioStream = await elevenlabs.textToSpeech.convert(
+      elevenVoiceId,
       {
-        method: 'POST',
-        headers: {
-          'Accept': 'audio/mpeg',
-          'Content-Type': 'application/json',
-          'xi-api-key': elevenLabsApiKey,
-        },
-        body: JSON.stringify({
-          text: textToSpeak,
-          model_id: 'eleven_multilingual_v2',
-          voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.75,
-            style: 0.0,
-            use_speaker_boost: true
-          }
-        })
+        text: textToSpeak,
+        modelId: 'eleven_multilingual_v2',
+        outputFormat: 'mp3_44100_128',
       }
     );
 
-    if (!audioResponse.ok) {
-      console.error('ElevenLabs API error:', await audioResponse.text());
+    const audioArrayBuffer = await new Response(audioStream).arrayBuffer();
+    
+    if (!audioArrayBuffer || audioArrayBuffer.byteLength === 0) {
+      console.error("Empty audio buffer received");
       return null;
     }
-
-    // Create audio element with streaming
-    const audioBlob = await audioResponse.blob();
+    
+    // Create blob from array buffer
+    const audioBlob = new Blob([audioArrayBuffer], { type: 'audio/mpeg' });
     const audioUrl = URL.createObjectURL(audioBlob);
+    
+    // Create and configure audio element
     const audio = new Audio(audioUrl);
-    
-    // Optimize audio settings
     audio.volume = 1.0;
-    audio.preload = 'auto';
     
+    // Wait for audio to be fully loaded
+    await new Promise((resolve) => {
+      audio.onloadeddata = resolve;
+      audio.onerror = () => {
+        console.error("Audio loading error");
+        resolve(null);
+      };
+      
+      // Fallback timeout
+      setTimeout(resolve, 1000);
+    });
+    
+    // Cleanup function
     const cleanup = () => {
-      if (!audio.paused) {
-        audio.pause();
-      }
-      if (audio.src) {
+      audio.pause();
+      audio.currentTime = 0;
+      if (audio.src.startsWith('blob:')) {
         URL.revokeObjectURL(audioUrl);
       }
     };
-
-    // Event listeners
-    audio.onended = cleanup;
-    audio.onerror = (e) => {
-      console.error('Audio playback error:', e);
+    
+    // Add completion listener
+    audio.onended = () => {
       cleanup();
     };
-
-    // Play immediately
+    
+    audio.onerror = (e) => {
+      console.error("Audio playback error:", e);
+      cleanup();
+    };
+    
+    // Try to play
     try {
+      // Ensure audio is ready
+      if (audio.readyState < 2) { // HAVE_CURRENT_DATA
+        await new Promise(resolve => {
+          audio.oncanplaythrough = resolve;
+          setTimeout(resolve, 500); // Fallback
+        });
+      }
+      
       await audio.play();
-      return { 
-        stop: cleanup, 
-        audio,
-        isPlaying: true 
-      };
+      return { stop: cleanup, audio };
     } catch (playError: any) {
+      console.error("Play error:", playError);
       if (playError.name === 'NotAllowedError' && onUserInteractionRequired) {
         onUserInteractionRequired();
         
-        return { 
-          stop: cleanup, 
-          audio, 
-          playAfterInteraction: async () => {
-            try {
-              await audio.play();
-              return audio;
-            } catch {
-              cleanup();
-              return null;
-            }
+        const playAfterInteraction = async () => {
+          try {
+            await audio.play();
+            return audio;
+          } catch (innerError) {
+            console.error("Play after interaction failed:", innerError);
+            cleanup();
+            return null;
           }
         };
+        
+        return { stop: cleanup, audio, playAfterInteraction };
       }
+      
       cleanup();
       return null;
     }
-
+    
   } catch (err) {
     console.error("ElevenLabs TTS error:", err);
     return null;
@@ -281,46 +288,53 @@ function TanakiExperience() {
 
 
 useEffect(() => {
-  const latest = [...recentEvents]
-    .reverse()
-    .find((e) => e._kind === "interactionRequest" && e.action === "says");
+  // Get all "says" events
+  const saysEvents = recentEvents
+    .filter((e) => e._kind === "interactionRequest" && e.action === "says" && e.content?.trim())
+    .sort((a, b) => (b._timestamp || 0) - (a._timestamp || 0)); // Sort newest first
   
-  if (!latest || !latest.content) return;
+  if (saysEvents.length === 0) return;
   
-  const content = latest.content.trim();
+  const latestEvent = saysEvents[0];
+  const content = latestEvent.content.trim();
   
-  // Only check ID, not content (allow same content to be spoken again)
-  if (lastProcessedResponseId.current === latest._id) {
+  // Skip if we just processed this exact event
+  if (lastProcessedResponseId.current === latestEvent._id) {
     return;
   }
   
-  // Update tracker immediately
-  lastProcessedResponseId.current = latest._id;
+  // Update trackers
+  lastProcessedResponseId.current = latestEvent._id;
   lastProcessedContent.current = content;
   
   // Update UI immediately
   setLiveText(content);
   
-  // Start TTS immediately (if not muted)
+  // Play audio if not muted
   if (!isMuted && content) {
     const playAudio = async () => {
-      const audioResult = await speakTextWithElevenLabs(
-        content,
-        () => {
-          pendingAudioRef.current = async () => {
-            if (audioResult?.playAfterInteraction) {
-              await audioResult.playAfterInteraction();
-            }
-          };
+      try {
+        const audioResult = await speakTextWithElevenLabs(
+          content,
+          () => {
+            // Store pending audio for after user interaction
+            pendingAudioRef.current = async () => {
+              if (audioResult?.playAfterInteraction) {
+                await audioResult.playAfterInteraction();
+              }
+            };
+          }
+        );
+        
+        if (audioResult?.playAfterInteraction) {
+          pendingAudioRef.current = audioResult.playAfterInteraction;
         }
-      );
-      
-      if (audioResult?.playAfterInteraction) {
-        pendingAudioRef.current = audioResult.playAfterInteraction;
+      } catch (error) {
+        console.error("Failed to play audio:", error);
       }
     };
     
-    // Don't wait for audio to finish loading before continuing
+    // Start audio playback without waiting
     playAudio();
   }
 }, [recentEvents, isMuted]);
