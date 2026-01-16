@@ -21,7 +21,7 @@ const elevenlabs = new ElevenLabsClient({
 
 // PRODUCTION-READY ElevenLabs TTS Function
 async function speakTextWithElevenLabs(text: string, onUserInteractionRequired?: () => void) {
-  const textToSpeak = text.trim() || "Processing your request";
+  const textToSpeak = text;
   
   if (!textToSpeak) return null;
   
@@ -33,78 +33,49 @@ async function speakTextWithElevenLabs(text: string, onUserInteractionRequired?:
         text: textToSpeak,
         modelId: 'eleven_multilingual_v2',
         outputFormat: 'mp3_44100_128',
+        voiceSettings: {
+        stability: 0.7,
+        similarityBoost: 0.8,
+       },
+        optimizeStreamingLatency: 3, // Add this line
       }
     );
 
-    const audioArrayBuffer = await new Response(audioStream).arrayBuffer();
-    
-    if (!audioArrayBuffer || audioArrayBuffer.byteLength === 0) {
-      console.error("Empty audio buffer received");
-      return null;
-    }
-    
-    // Create blob from array buffer
-    const audioBlob = new Blob([audioArrayBuffer], { type: 'audio/mpeg' });
+    // Convert to blob and create audio
+    const audioBlob = await new Response(audioStream).blob();
     const audioUrl = URL.createObjectURL(audioBlob);
-    
-    // Create and configure audio element
     const audio = new Audio(audioUrl);
     audio.volume = 1.0;
-    
-    // Wait for audio to be fully loaded
-    await new Promise((resolve) => {
-      audio.onloadeddata = resolve;
-      audio.onerror = () => {
-        console.error("Audio loading error");
-        resolve(null);
-      };
-      
-      // Fallback timeout
-      setTimeout(resolve, 1000);
-    });
     
     // Cleanup function
     const cleanup = () => {
       audio.pause();
-      audio.currentTime = 0;
-      if (audio.src.startsWith('blob:')) {
-        URL.revokeObjectURL(audioUrl);
-      }
+      URL.revokeObjectURL(audioUrl);
     };
     
-    // Add completion listener
+    // Add event listeners for cleanup
     audio.onended = () => {
-      cleanup();
+      URL.revokeObjectURL(audioUrl);
     };
     
-    audio.onerror = (e) => {
-      console.error("Audio playback error:", e);
-      cleanup();
+    audio.onerror = () => {
+      URL.revokeObjectURL(audioUrl);
     };
     
     // Try to play
     try {
-      // Ensure audio is ready
-      if (audio.readyState < 2) { // HAVE_CURRENT_DATA
-        await new Promise(resolve => {
-          audio.oncanplaythrough = resolve;
-          setTimeout(resolve, 500); // Fallback
-        });
-      }
-      
       await audio.play();
       return { stop: cleanup, audio };
     } catch (playError: any) {
-      console.error("Play error:", playError);
       if (playError.name === 'NotAllowedError' && onUserInteractionRequired) {
         onUserInteractionRequired();
         
+        // Return function to play after interaction
         const playAfterInteraction = async () => {
           try {
             await audio.play();
             return audio;
-          } catch (innerError) {
-            console.error("Play after interaction failed:", innerError);
+          } catch {
             cleanup();
             return null;
           }
@@ -288,53 +259,48 @@ function TanakiExperience() {
 
 
 useEffect(() => {
-  // Get all "says" events
-  const saysEvents = recentEvents
-    .filter((e) => e._kind === "interactionRequest" && e.action === "says" && e.content?.trim())
-    .sort((a, b) => (b._timestamp || 0) - (a._timestamp || 0)); // Sort newest first
+  const latest = [...recentEvents]
+    .reverse()
+    .find((e) => e._kind === "interactionRequest" && e.action === "says");
   
-  if (saysEvents.length === 0) return;
+  if (!latest || !latest.content) return;
   
-  const latestEvent = saysEvents[0];
-  const content = latestEvent.content.trim();
+  const content = latest.content.trim();
   
-  // Skip if we just processed this exact event
-  if (lastProcessedResponseId.current === latestEvent._id) {
+  // Check if we've already processed this exact response
+  if (lastProcessedResponseId.current === latest._id) {
+    return;
+  }
+  
+  // Check if we're already showing this content
+  if (lastProcessedContent.current === content) {
     return;
   }
   
   // Update trackers
-  lastProcessedResponseId.current = latestEvent._id;
+  lastProcessedResponseId.current = latest._id;
   lastProcessedContent.current = content;
   
-  // Update UI immediately
   setLiveText(content);
   
-  // Play audio if not muted
   if (!isMuted && content) {
     const playAudio = async () => {
-      try {
-        const audioResult = await speakTextWithElevenLabs(
-          content,
-          () => {
-            // Store pending audio for after user interaction
-            pendingAudioRef.current = async () => {
-              if (audioResult?.playAfterInteraction) {
-                await audioResult.playAfterInteraction();
-              }
-            };
-          }
-        );
-        
-        if (audioResult?.playAfterInteraction) {
-          pendingAudioRef.current = audioResult.playAfterInteraction;
+      const audioResult = await speakTextWithElevenLabs(
+        content,
+        () => {
+          pendingAudioRef.current = async () => {
+            if (audioResult?.playAfterInteraction) {
+              await audioResult.playAfterInteraction();
+            }
+          };
         }
-      } catch (error) {
-        console.error("Failed to play audio:", error);
+      );
+      
+      if (audioResult?.playAfterInteraction) {
+        pendingAudioRef.current = audioResult.playAfterInteraction;
       }
     };
     
-    // Start audio playback without waiting
     playAudio();
   }
 }, [recentEvents, isMuted]);
@@ -595,7 +561,7 @@ useEffect(() => {
                     <strong className={`text-sm ${
                       msg.isAI ? "text-purple-300" : "text-cyan-300"
                     }`}>
-                      {msg.isAI ? "MEILIN" : "YOU"}
+                      {msg.isAI ? "MIYU" : "YOU"}
                     </strong>
                     {!msg.isAI && (
                       <div className="flex items-center gap-1 bg-cyan-500/20 px-2 py-1 rounded-full">
