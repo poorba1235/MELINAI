@@ -267,42 +267,58 @@ useEffect(() => {
   
   const content = latest.content.trim();
   
-  // Check if we've already processed this exact response
   if (lastProcessedResponseId.current === latest._id) {
     return;
   }
   
-  // Check if we're already showing this content
-  if (lastProcessedContent.current === content) {
-    return;
-  }
-  
-  // Update trackers
-  lastProcessedResponseId.current = latest._id;
-  lastProcessedContent.current = content;
-  
-  setLiveText(content);
-  
-  if (!isMuted && content) {
-    const playAudio = async () => {
-      const audioResult = await speakTextWithElevenLabs(
-        content,
-        () => {
-          pendingAudioRef.current = async () => {
-            if (audioResult?.playAfterInteraction) {
-              await audioResult.playAfterInteraction();
-            }
-          };
-        }
-      );
-      
-      if (audioResult?.playAfterInteraction) {
-        pendingAudioRef.current = audioResult.playAfterInteraction;
-      }
-    };
+  // Add a small delay to ensure message is complete
+  const timer = setTimeout(() => {
+    // Double-check content is still the same
+    const currentLatest = [...recentEvents]
+      .reverse()
+      .find((e) => e._kind === "interactionRequest" && e.action === "says");
     
-    playAudio();
-  }
+    if (!currentLatest || currentLatest._id !== latest._id) {
+      return; // Message changed, abort
+    }
+    
+    const finalContent = currentLatest.content.trim();
+    
+    if (lastProcessedContent.current === finalContent) {
+      return;
+    }
+    
+    console.log("Final content for ElevenLabs:", finalContent);
+    console.log("Length:", finalContent.length);
+    
+    lastProcessedResponseId.current = latest._id;
+    lastProcessedContent.current = finalContent;
+    
+    setLiveText(finalContent);
+    
+    if (!isMuted && finalContent) {
+      const playAudio = async () => {
+        const audioResult = await speakTextWithElevenLabs(
+          finalContent,
+          () => {
+            pendingAudioRef.current = async () => {
+              if (audioResult?.playAfterInteraction) {
+                await audioResult.playAfterInteraction();
+              }
+            };
+          }
+        );
+        
+        if (audioResult?.playAfterInteraction) {
+          pendingAudioRef.current = audioResult.playAfterInteraction;
+        }
+      };
+      
+      playAudio();
+    }
+  }, 600); // Wait 300ms for message to be complete
+  
+  return () => clearTimeout(timer);
 }, [recentEvents, isMuted]);
 
   // Measure overlay height
