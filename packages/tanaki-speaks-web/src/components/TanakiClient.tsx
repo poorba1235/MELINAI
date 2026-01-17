@@ -294,39 +294,33 @@ useEffect(() => {
   // ENHANCED COMPLETION LOGIC:
   // Check if the message looks complete
   
-  // 1. Ends with sentence-ending punctuation
-  const endsWithSentencePunctuation = /[.!?]\s*$/.test(newContent);
+  // 1. Ends with punctuation (most reliable)
+  const endsWithPunctuation = /[.!?]\s*$/.test(newContent);
   
   // 2. Is very long (even without punctuation)
-  const isVeryLong = newContent.length > 120; // Reduced from 180
+  const isVeryLong = newContent.length > 120;
   
-  // 3. Has punctuation AND is reasonably long (include commas in punctuation check)
-  const hasPunctuationAndLength = /[.!?,]/.test(newContent) && newContent.length > 25;
+  // 3. Has punctuation AND is reasonably long (not just "Hi!" or "Hey again!")
+  // This prevents short mid-sentence punctuation from triggering too early
+  const hasPunctuationAndLength = /[.!?]/.test(newContent) && newContent.length > 25;
   
   // 4. Contains a question mark (but only if it's likely a complete question)
   const hasQuestionMark = newContent.includes('?');
-  const isCompleteQuestion = hasQuestionMark && (endsWithSentencePunctuation || newContent.length > 30);
+  const isCompleteQuestion = hasQuestionMark && (endsWithPunctuation || newContent.length > 30);
   
-  // 5. Check for trailing continuation words that indicate incomplete thoughts
-  const hasTrailingContinuation = /\b(which|that|and|but|however|although|because|so|then)\s*$/i.test(newContent);
-  const isIncompleteDueToContinuation = hasTrailingContinuation && !endsWithSentencePunctuation;
-  
-  const isComplete = (endsWithSentencePunctuation || 
+  const isComplete = endsWithPunctuation || 
                      isVeryLong || 
                      hasPunctuationAndLength || 
-                     isCompleteQuestion) &&
-                     !isIncompleteDueToContinuation;
+                     isCompleteQuestion;
   
   console.log("Completion check:", {
     content: newContent,
     length: newContent.length,
-    endsWithSentencePunctuation,
+    endsWithPunctuation,
     isVeryLong,
     hasPunctuationAndLength,
     hasQuestionMark,
     isCompleteQuestion,
-    hasTrailingContinuation,
-    isIncompleteDueToContinuation,
     isComplete
   });
   
@@ -367,6 +361,7 @@ useEffect(() => {
     }
   }
 }, [recentEvents, isMuted, accumulatedMessages]);
+  
   // Measure overlay height
   useEffect(() => {
     const el = overlayRef.current;
