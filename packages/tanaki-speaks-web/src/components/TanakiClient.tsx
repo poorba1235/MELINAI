@@ -13,8 +13,8 @@ import { Tanaki3DExperience } from "./3d/Tanaki3DExperience";
 import { Cpu, Home, Menu, Settings, Users, Zap } from "lucide-react";
 
 // ElevenLabs Configuration
-const elevenLabsApiKey = '6ebf8d95b473254e4ee217995637b17b71f3e8e7481ef1a3a8d5b49dd4fbd504';
-const elevenVoiceId = "cgSgspJ2msm6clMCkdW9";
+const elevenLabsApiKey = 'sk_acdb28243a5faa6bd728925552d34f64704a6e10eb430c5a';
+const elevenVoiceId = "ocZQ262SsZb9RIxcQBOj";
 const elevenlabs = new ElevenLabsClient({
   apiKey: elevenLabsApiKey,
 });
