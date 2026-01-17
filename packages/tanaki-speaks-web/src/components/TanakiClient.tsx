@@ -292,10 +292,12 @@ useEffect(() => {
   }));
   
   // Check if the message looks complete
-  const isComplete = /[.!?]$/.test(newContent) || 
-                     newContent.length > 100 || 
-                     newContent.includes('?') ||
-                     newContent.includes('!');
+  // More intelligent completion detection:
+  const endsWithPunctuation = /[.!?]\s*$/.test(newContent);
+  const isLongEnough = newContent.length > 120; // Increased from 100
+  const hasMultipleSentences = newContent.split(/[.!?]+/).filter(s => s.trim().length > 0).length > 1;
+  
+  const isComplete = endsWithPunctuation || isLongEnough || hasMultipleSentences;
   
   if (!isComplete) {
     console.log("Waiting for more complete message:", newContent);
