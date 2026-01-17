@@ -263,71 +263,77 @@ const [accumulatedMessages, setAccumulatedMessages] = useState<Record<string, st
 
 // Updated useEffect
 useEffect(() => {
-  // Get all "says" interaction events in order
+  // Get all recent "says" events
   const saysEvents = recentEvents
-    .filter(
-      (e) =>
-        e._kind === "interactionRequest" &&
-        e.action === "says" &&
-        typeof e.content === "string"
-    )
-    .sort((a, b) => (a._timestamp || 0) - (b._timestamp || 0));
-
-  if (!saysEvents.length) return;
-
+    .filter((e) => e._kind === "interactionRequest" && e.action === "says" && e.content)
+    .sort((a, b) => (a._timestamp || 0) - (b._timestamp || 0)); // Oldest first
+  
+  if (saysEvents.length === 0) return;
+  
+  // Accumulate messages by their base ID (assuming IDs are like "msg_123")
   const latestEvent = saysEvents[saysEvents.length - 1];
   const eventId = latestEvent._id;
-
-  // Append only the latest chunk to accumulated content
-  const previousContent = accumulatedMessages[eventId] || "";
-  const updatedContent = `${previousContent} ${latestEvent.content}`
-    .replace(/\s+/g, " ")
-    .trim();
-
-  // Ignore if no change
-  if (previousContent === updatedContent) return;
-
-  // Save accumulated content
-  setAccumulatedMessages((prev) => ({
+  
+  // Get or create accumulated content for this event
+  const newContent = saysEvents
+    .map(e => e.content.trim())
+    .join(' ')
+    .replace(/\s+/g, ' ');
+  
+  // Only process if content has changed
+  if (accumulatedMessages[eventId] === newContent) {
+    return;
+  }
+  
+  // Update accumulated content
+  setAccumulatedMessages(prev => ({
     ...prev,
-    [eventId]: updatedContent,
+    [eventId]: newContent
   }));
-
-  // Always show live partial text
-  setLiveText(updatedContent);
-
-  // Only speak when sentence is truly finished
-  const isComplete = /[.!?]$/.test(updatedContent);
-  if (!isComplete) return;
-
-  // Prevent double-processing
-  if (lastProcessedResponseId.current === eventId) return;
-
-  lastProcessedResponseId.current = eventId;
-  lastProcessedContent.current = updatedContent;
-
-  if (isMuted || !updatedContent) return;
-
-  const playAudio = async () => {
-    const audioResult = await speakTextWithElevenLabs(
-      updatedContent,
-      () => {
-        pendingAudioRef.current = async () => {
-          if (audioResult?.playAfterInteraction) {
-            await audioResult.playAfterInteraction();
+  
+  // Check if the message looks complete
+  const isComplete = /[.!?]$/.test(newContent) || 
+                     newContent.length > 100 || 
+                     newContent.includes('?') ||
+                     newContent.includes('!');
+  
+  if (!isComplete) {
+    console.log("Waiting for more complete message:", newContent);
+    setLiveText(newContent); // Still show partial text
+    return; // Don't send to ElevenLabs yet
+  }
+  
+  // Only send to ElevenLabs when complete
+  if (lastProcessedResponseId.current !== eventId) {
+    console.log("Sending complete message to ElevenLabs:", newContent);
+    
+    lastProcessedResponseId.current = eventId;
+    lastProcessedContent.current = newContent;
+    
+    setLiveText(newContent);
+    
+    if (!isMuted && newContent) {
+      const playAudio = async () => {
+        const audioResult = await speakTextWithElevenLabs(
+          newContent,
+          () => {
+            pendingAudioRef.current = async () => {
+              if (audioResult?.playAfterInteraction) {
+                await audioResult.playAfterInteraction();
+              }
+            };
           }
-        };
-      }
-    );
-
-    if (audioResult?.playAfterInteraction) {
-      pendingAudioRef.current = audioResult.playAfterInteraction;
+        );
+        
+        if (audioResult?.playAfterInteraction) {
+          pendingAudioRef.current = audioResult.playAfterInteraction;
+        }
+      };
+      
+      playAudio();
     }
-  };
-
-  playAudio();
+  }
 }, [recentEvents, isMuted, accumulatedMessages]);
-
 
   // Measure overlay height
   useEffect(() => {
