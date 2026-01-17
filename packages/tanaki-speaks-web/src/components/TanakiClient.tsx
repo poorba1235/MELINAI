@@ -259,83 +259,69 @@ function TanakiExperience() {
 
 
 // Add this state
-const [accumulatedMessages, setAccumulatedMessages] = useState<Record<string, string>>({});
+const processingTimer = useRef<NodeJS.Timeout | null>(null);
+const lastSentContent = useRef<string>('');
 
-// Updated useEffect
 useEffect(() => {
-  // Get all recent "says" events
+  // Get says events
   const saysEvents = recentEvents
     .filter((e) => e._kind === "interactionRequest" && e.action === "says" && e.content)
-    .sort((a, b) => (a._timestamp || 0) - (b._timestamp || 0)); // Oldest first
+    .sort((a, b) => (a._timestamp || 0) - (b._timestamp || 0));
   
   if (saysEvents.length === 0) return;
   
-  // Accumulate messages by their base ID (assuming IDs are like "msg_123")
-  const latestEvent = saysEvents[saysEvents.length - 1];
-  const eventId = latestEvent._id;
-  
-  // Get or create accumulated content for this event
+  // Build content
   const newContent = saysEvents
-    .map(e => e.content.trim())
+    .map(e => e.content?.trim() || '')
+    .filter(Boolean)
     .join(' ')
-    .replace(/\s+/g, ' ');
+    .replace(/\s+/g, ' ')
+    .trim();
   
-  // Only process if content has changed
-  if (accumulatedMessages[eventId] === newContent) {
-    return;
+  if (!newContent) return;
+  
+  // Update UI
+  setLiveText(newContent);
+  
+  // Clear previous timer
+  if (processingTimer.current) {
+    clearTimeout(processingTimer.current);
   }
   
-  // Update accumulated content
-  setAccumulatedMessages(prev => ({
-    ...prev,
-    [eventId]: newContent
-  }));
-  
-  // Check if the message looks complete
-  // More intelligent completion detection:
-  const endsWithPunctuation = /[.!?]\s*$/.test(newContent);
-  const isLongEnough = newContent.length > 120; // Increased from 100
-  const hasMultipleSentences = newContent.split(/[.!?]+/).filter(s => s.trim().length > 0).length > 1;
-  
-  const isComplete = endsWithPunctuation || isLongEnough || hasMultipleSentences;
-  
-  if (!isComplete) {
-    console.log("Waiting for more complete message:", newContent);
-    setLiveText(newContent); // Still show partial text
-    return; // Don't send to ElevenLabs yet
-  }
-  
-  // Only send to ElevenLabs when complete
-  if (lastProcessedResponseId.current !== eventId) {
-    console.log("Sending complete message to ElevenLabs:", newContent);
+  // Set new timer
+  processingTimer.current = setTimeout(() => {
+    // Don't send duplicates
+    if (lastSentContent.current === newContent) return;
     
-    lastProcessedResponseId.current = eventId;
-    lastProcessedContent.current = newContent;
+    // SIMPLE RULES THAT ALWAYS WORK:
+    // 1. If it ends with punctuation → send
+    // 2. If it has punctuation anywhere and is > 5 chars → send
+    // 3. If it's > 15 chars (even without punctuation) → send
     
-    setLiveText(newContent);
+    const endsWithPunct = /[.!?]\s*$/.test(newContent);
+    const hasPunctAnywhere = /[.!?]/.test(newContent);
+    const isLongEnough = newContent.length > 15;
+    const hasPunctAndLength = hasPunctAnywhere && newContent.length > 5;
     
-    if (!isMuted && newContent) {
-      const playAudio = async () => {
-        const audioResult = await speakTextWithElevenLabs(
-          newContent,
-          () => {
-            pendingAudioRef.current = async () => {
-              if (audioResult?.playAfterInteraction) {
-                await audioResult.playAfterInteraction();
-              }
-            };
-          }
-        );
-        
-        if (audioResult?.playAfterInteraction) {
-          pendingAudioRef.current = audioResult.playAfterInteraction;
-        }
-      };
+    const shouldSend = endsWithPunct || hasPunctAndLength || isLongEnough;
+    
+    if (shouldSend) {
+      lastSentContent.current = newContent;
       
-      playAudio();
+      if (!isMuted) {
+        speakTextWithElevenLabs(newContent, () => {
+          // Callback if needed
+        });
+      }
     }
-  }
-}, [recentEvents, isMuted, accumulatedMessages]);
+  }, 500);
+  
+  return () => {
+    if (processingTimer.current) {
+      clearTimeout(processingTimer.current);
+    }
+  };
+}, [recentEvents, isMuted]);
 
   // Measure overlay height
   useEffect(() => {
