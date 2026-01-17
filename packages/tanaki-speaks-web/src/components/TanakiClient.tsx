@@ -223,7 +223,7 @@ function TanakiExperience() {
 
   // Filter events
   const recentEvents = useMemo(() => {
-    const baseDurationMs = 14000;
+    const baseDurationMs = 20000;
     
     const relevant = events.filter((e) => {
       if (e._kind === "perception") return !e.internal && e.action === "said";
