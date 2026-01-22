@@ -606,58 +606,46 @@ function TanakiExperience() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 rounded-2xl bg-black/10 border border-cyan-500/10 shadow-inner mt-3 chat-messages">
-            {[...recentUserMessages, ...recentEvents
-              .filter(e => e._kind === "interactionRequest" && e.action === "says" && e.content)
-              .map(event => ({
-                id: event._id,
-                text: event.content,
-                timestamp: new Date(event._timestamp || Date.now()),
-                isAI: true
-              }))]
-              .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
-              .slice(-10)
-              .map((msg) => (
-                <div 
-                  key={msg.id}
-                  className={`mb-3 p-3 rounded-xl ${
-                    msg.isAI 
-                      ? "bg-purple-500/10 border border-purple-500/30 ml-8" 
-                      : "bg-cyan-500/10 border border-cyan-500/30 mr-8"
-                  }`}
-                >
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className={`w-2 h-2 rounded-full ${
-                      msg.isAI ? "bg-purple-400" : "bg-cyan-400"
-                    }`}></div>
-                    <strong className={`text-sm ${
-                      msg.isAI ? "text-purple-300" : "text-cyan-300"
-                    }`}>
-                      {msg.isAI ? "MIYU" : "YOU"}
-                    </strong>
-                    {!msg.isAI && (
-                      <div className="flex items-center gap-1 bg-cyan-500/20 px-2 py-1 rounded-full">
-                        <span className="text-xs text-cyan-300 font-medium">LIVE</span>
-                        <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-pulse"></div>
-                      </div>
-                    )}
-                  </div>
-                  <div className={`text-sm ${
-                    msg.isAI ? "text-purple-100" : "text-cyan-100"
-                  }`}>
-                    {msg.text}
-                  </div>
-                </div>
-              ))}
-            
-            {recentUserMessages.length === 0 && 
-             recentEvents.filter(e => e._kind === "interactionRequest" && e.action === "says").length === 0 && (
-              <div className="text-center py-8 text-cyan-300/50">
-                <div className="text-lg mb-2"></div>
-                <div className="text-sm"></div>
-              </div>
-            )}
-          </div>
+    {/* Simplified version */}
+<div className="flex-1 overflow-y-auto p-4 rounded-2xl bg-black/10 border border-cyan-500/10 shadow-inner mt-3 chat-messages">
+  {/* All messages in order */}
+  {[...recentUserMessages, ...recentEvents
+    .filter(e => e._kind === "interactionRequest" && e.action === "says" && e.content)
+    .map(event => ({
+      id: event._id,
+      content: event.content || "",
+      timestamp: new Date(event._timestamp || Date.now()),
+      isAI: true
+    }))]
+    .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+    .map((msg) => (
+      <div 
+        key={msg.id}
+        className={`mb-3 p-3 rounded-xl ${
+          msg.isAI 
+            ? "bg-purple-500/10 border border-purple-500/30 ml-8" 
+            : "bg-cyan-500/10 border border-cyan-500/30 mr-8"
+        }`}
+      >
+        <div className="flex items-center gap-2 mb-1">
+          <div className={`w-2 h-2 rounded-full ${
+            msg.isAI ? "bg-purple-400" : "bg-cyan-400"
+          }`}></div>
+          <strong className={`text-sm ${
+            msg.isAI ? "text-purple-300" : "text-cyan-300"
+          }`}>
+            {msg.isAI ? "MIYU" : "YOU"}
+          </strong>
+        </div>
+        <div className={`text-sm ${
+          msg.isAI ? "text-purple-100" : "text-cyan-100"
+        }`}>
+          {/* FIX: Use 'content' instead of 'text' for AI messages */}
+          {msg.isAI ? msg.content : (msg as any).text}
+        </div>
+      </div>
+    ))}
+</div>
 
           {isRecording && (
             <div className="mb-3 p-3 rounded-xl bg-gradient-to-r from-cyan-500/20 to-purple-500/20 border border-cyan-500/30">
