@@ -160,7 +160,6 @@ function TanakiExperience() {
   const [userMessages, setUserMessages] = useState<{id: string, text: string, timestamp: Date}[]>([]);
   
   // TTS state - FIXED: Track processing state
-  const lastProcessedResponseId = useRef<string | null>(null);
   const currentSpeakingRef = useRef<{
     id: string;
     content: string;
@@ -177,6 +176,11 @@ function TanakiExperience() {
 
   // Debug state to track events
   const [debugLog, setDebugLog] = useState<string[]>([]);
+
+  // TTS processing refs
+  const processedTtsEventsRef = useRef<Set<string>>(new Set());
+  const lastTtsProcessingTimeRef = useRef<number>(Date.now());
+  const lastTtsPlayTimeRef = useRef<number>(0);
 
   // Update timestamp
   useEffect(() => {
@@ -252,18 +256,6 @@ function TanakiExperience() {
   const recentEvents = useMemo(() => {
     const chatDurationMs = 60000; // 60 seconds for chat display
     
-    // Log all events for debugging
-    if (events.length > 0) {
-      console.log("All events:", events);
-      const saysEvents = events.filter(e => 
-        e._kind === "interactionRequest" && e.action === "says"
-      );
-      if (saysEvents.length > 0) {
-        console.log("Says events found:", saysEvents);
-        console.log("First says event content:", saysEvents[0]?.content);
-      }
-    }
-    
     // Filter for recent events
     const relevant = events.filter((e) => {
       // Include both perception and interactionRequest events
@@ -300,77 +292,70 @@ function TanakiExperience() {
 
   // FIXED: Main TTS processing effect
   useEffect(() => {
-    // Get ALL "says" events from the last 30 seconds for TTS
-    const ttsEvents = events
-      .filter((e) => e._kind === "interactionRequest" && e.action === "says" && e.content)
-      .filter((e) => now - e._timestamp >= 0 && now - e._timestamp < 30000) // 30 seconds for TTS
-      .sort((a, b) => (a._timestamp || 0) - (b._timestamp || 0)); // Oldest first
-  
-    if (ttsEvents.length === 0) return;
-    
-    // Log for debugging
-    console.log("TTS Events to process:", ttsEvents.length, ttsEvents);
-    
-    // Group events by conversation ID or get the latest complete response
-    // Find the latest completed response
-    let latestCompleteEvent = null;
-    let accumulatedText = "";
-    
-    // Work backwards from newest to find complete responses
-    for (let i = ttsEvents.length - 1; i >= 0; i--) {
-      const event = ttsEvents[i];
-      accumulatedText = event.content + (accumulatedText ? " " + accumulatedText : "");
-      
-      // Check if this looks like a complete response
-      const endsWithPunctuation = /[.!?]\s*$/.test(event.content);
-      const isComplete = endsWithPunctuation || event.content.length > 80;
-      
-      if (isComplete) {
-        latestCompleteEvent = {
-          id: event._id,
-          content: accumulatedText.trim()
-        };
-        break;
-      }
+    // Debounce TTS processing to avoid rapid re-runs
+    const nowTime = Date.now();
+    if (nowTime - lastTtsProcessingTimeRef.current < 500) {
+      return; // Only process every 500ms
     }
-    
-    // If no complete response found, use the latest text
-    if (!latestCompleteEvent && ttsEvents.length > 0) {
-      const latestEvent = ttsEvents[ttsEvents.length - 1];
-      latestCompleteEvent = {
-        id: latestEvent._id,
-        content: latestEvent.content.trim()
-      };
-    }
-    
-    if (!latestCompleteEvent) return;
-    
-    // FIXED: Only process if this is a NEW response
-    if (currentSpeakingRef.current?.id === latestCompleteEvent.id) {
-      // Already speaking this response
-      setLiveText(latestCompleteEvent.content);
+    lastTtsProcessingTimeRef.current = nowTime;
+
+    // Get UNPROCESSED "says" events
+    const unprocessedTtsEvents = events
+      .filter((e) => 
+        e._kind === "interactionRequest" && 
+        e.action === "says" && 
+        e.content &&
+        !processedTtsEventsRef.current.has(e._id)
+      )
+      .sort((a, b) => (a._timestamp || 0) - (b._timestamp || 0));
+
+    if (unprocessedTtsEvents.length === 0) return;
+
+    // Mark these events as processed immediately
+    unprocessedTtsEvents.forEach(event => {
+      processedTtsEventsRef.current.add(event._id);
+    });
+
+    // Take the latest event
+    const latestEvent = unprocessedTtsEvents[unprocessedTtsEvents.length - 1];
+    const responseText = latestEvent.content.trim();
+
+    if (!responseText) return;
+
+    // Skip if already speaking this exact content
+    if (currentSpeakingRef.current?.content === responseText) {
       return;
     }
-    
-    // FIXED: Stop any current audio and process new response
-    stopAllAudio();
-    
+
     console.log("Processing new TTS response:", {
-      id: latestCompleteEvent.id,
-      content: latestCompleteEvent.content.substring(0, 100) + "...",
-      length: latestCompleteEvent.content.length
+      id: latestEvent._id,
+      content: responseText.substring(0, 100) + "...",
+      length: responseText.length
     });
-    
+
+    // Stop any current audio
+    stopAllAudio();
+
     // Update state
-    currentSpeakingRef.current = latestCompleteEvent;
-    lastProcessedResponseId.current = latestCompleteEvent.id;
-    setLiveText(latestCompleteEvent.content);
-    
+    currentSpeakingRef.current = {
+      id: latestEvent._id,
+      content: responseText
+    };
+    setLiveText(responseText);
+
     // Speak the text if not muted
-    if (!isMuted && latestCompleteEvent.content) {
+    if (!isMuted && responseText) {
       const playAudio = async () => {
+        // TTS cooldown check
+        const nowTime = Date.now();
+        if (nowTime - lastTtsPlayTimeRef.current < 1000) {
+          console.log("TTS cooldown, skipping");
+          return;
+        }
+        lastTtsPlayTimeRef.current = nowTime;
+        
         const audioResult = await speakTextWithElevenLabs(
-          latestCompleteEvent.content,
+          responseText,
           () => {
             pendingAudioRef.current = async () => {
               if (audioResult?.playAfterInteraction) {
@@ -387,7 +372,18 @@ function TanakiExperience() {
       
       playAudio();
     }
-  }, [events, now, isMuted]); // Removed accumulatedMessages dependency
+  }, [events, isMuted]); // Removed `now` dependency
+
+  // Cleanup processed events periodically
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // Clear old processed events every 5 minutes to prevent memory leak
+      processedTtsEventsRef.current.clear();
+      console.log("Cleared processed TTS events cache");
+    }, 300000); // 5 minutes
+
+    return () => clearInterval(interval);
+  }, []);
   
   // Measure overlay height
   useEffect(() => {
@@ -494,6 +490,7 @@ function TanakiExperience() {
     // Sort by timestamp (oldest first)
     return allMessages.sort((a, b) => a.timestamp - b.timestamp);
   }, [recentUserMessages, recentEvents]);
+
 
   return (
     <div
