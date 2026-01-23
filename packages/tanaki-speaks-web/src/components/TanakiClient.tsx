@@ -249,22 +249,20 @@ function TanakiExperience() {
   }, []);
 
   // FIXED: Get ALL recent events properly
-  // FIXED: Get ALL recent events properly
   const recentEvents = useMemo(() => {
     const chatDurationMs = 60000; // 60 seconds for chat display
     
-    // REMOVE OR COMMENT OUT THESE LOGS:
     // Log all events for debugging
-    // if (events.length > 0) {
-    //   console.log("All events:", events);
-    //   const saysEvents = events.filter(e => 
-    //     e._kind === "interactionRequest" && e.action === "says"
-    //   );
-    //   if (saysEvents.length > 0) {
-    //     console.log("Says events found:", saysEvents);
-    //     console.log("First says event content:", saysEvents[0]?.content);
-    //   }
-    // }
+    if (events.length > 0) {
+      console.log("All events:", events);
+      const saysEvents = events.filter(e => 
+        e._kind === "interactionRequest" && e.action === "says"
+      );
+      if (saysEvents.length > 0) {
+        console.log("Says events found:", saysEvents);
+        console.log("First says event content:", saysEvents[0]?.content);
+      }
+    }
     
     // Filter for recent events
     const relevant = events.filter((e) => {
@@ -301,57 +299,25 @@ function TanakiExperience() {
   }, [audioUnlocked]);
 
   // FIXED: Main TTS processing effect
-// Add these refs near your other refs (around line 98-100):
-const lastTtsProcessingTimeRef = useRef<number>(Date.now());
-const processedEventIdsRef = useRef<Set<string>>(new Set());
-
-// REPLACE the entire TTS useEffect (lines 237-319) with this:
-
-  // FIXED: Main TTS processing effect with debouncing
   useEffect(() => {
-    // Debounce to prevent continuous processing
-    const nowTime = Date.now();
-    if (nowTime - lastTtsProcessingTimeRef.current < 1000) {
-      return; // Only process every 1 second
-    }
-    lastTtsProcessingTimeRef.current = nowTime;
-
     // Get ALL "says" events from the last 30 seconds for TTS
     const ttsEvents = events
       .filter((e) => e._kind === "interactionRequest" && e.action === "says" && e.content)
-      .filter((e) => nowTime - e._timestamp >= 0 && nowTime - e._timestamp < 30000) // 30 seconds for TTS
+      .filter((e) => now - e._timestamp >= 0 && now - e._timestamp < 30000) // 30 seconds for TTS
       .sort((a, b) => (a._timestamp || 0) - (b._timestamp || 0)); // Oldest first
   
     if (ttsEvents.length === 0) return;
     
-    // Find the most recent UNPROCESSED event
-    let eventToProcess = null;
-    
-    // Check from newest to oldest for unprocessed events
-    for (let i = ttsEvents.length - 1; i >= 0; i--) {
-      const event = ttsEvents[i];
-      if (!processedEventIdsRef.current.has(event._id)) {
-        eventToProcess = event;
-        break;
-      }
-    }
-    
-    // If all events are processed, use the latest one anyway (for re-speaking)
-    if (!eventToProcess) {
-      eventToProcess = ttsEvents[ttsEvents.length - 1];
-    }
-    
-    // Mark as processed
-    processedEventIdsRef.current.add(eventToProcess._id);
+    // Log for debugging
+    console.log("TTS Events to process:", ttsEvents.length, ttsEvents);
     
     // Group events by conversation ID or get the latest complete response
-    // Find the latest completed response starting from our event
+    // Find the latest completed response
     let latestCompleteEvent = null;
     let accumulatedText = "";
     
-    // Work backwards from our event to find complete responses
-    const eventIndex = ttsEvents.findIndex(e => e._id === eventToProcess._id);
-    for (let i = eventIndex; i >= 0; i--) {
+    // Work backwards from newest to find complete responses
+    for (let i = ttsEvents.length - 1; i >= 0; i--) {
       const event = ttsEvents[i];
       accumulatedText = event.content + (accumulatedText ? " " + accumulatedText : "");
       
@@ -368,11 +334,12 @@ const processedEventIdsRef = useRef<Set<string>>(new Set());
       }
     }
     
-    // If no complete response found, use the event's text
-    if (!latestCompleteEvent) {
+    // If no complete response found, use the latest text
+    if (!latestCompleteEvent && ttsEvents.length > 0) {
+      const latestEvent = ttsEvents[ttsEvents.length - 1];
       latestCompleteEvent = {
-        id: eventToProcess._id,
-        content: eventToProcess.content.trim()
+        id: latestEvent._id,
+        content: latestEvent.content.trim()
       };
     }
     
@@ -420,18 +387,7 @@ const processedEventIdsRef = useRef<Set<string>>(new Set());
       
       playAudio();
     }
-  }, [events, isMuted]); // Remove `now` from dependencies
-  
-  // Add cleanup for processed events
-  useEffect(() => {
-    const interval = setInterval(() => {
-      // Clear old processed events every 2 minutes
-      processedEventIdsRef.current.clear();
-      console.log("Cleared processed events cache");
-    }, 120000); // 2 minutes
-
-    return () => clearInterval(interval);
-  }, []);
+  }, [events, now, isMuted]); // Removed accumulatedMessages dependency
   
   // Measure overlay height
   useEffect(() => {
