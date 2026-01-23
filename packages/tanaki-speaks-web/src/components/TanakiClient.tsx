@@ -29,18 +29,14 @@ async function speakTextWithElevenLabs(text: string, onUserInteractionRequired?:
   
   if (!textToSpeak) return null;
   
-  console.log("🔊 ElevenLabs TTS requested for text:", textToSpeak.substring(0, 100) + (textToSpeak.length > 100 ? "..." : ""));
-  
   // STOP any currently playing audio immediately
   if (currentAudioRefs.current) {
-    console.log("🛑 Stopping previous audio");
     currentAudioRefs.current.stop();
     currentAudioRefs.current = null;
   }
   
   try {
     // Get audio stream from ElevenLabs
-    console.log("📡 Calling ElevenLabs API...");
     const audioStream = await elevenlabs.textToSpeech.convert(
       elevenVoiceId,
       {
@@ -55,8 +51,6 @@ async function speakTextWithElevenLabs(text: string, onUserInteractionRequired?:
       }
     );
 
-    console.log("✅ Received audio stream from ElevenLabs");
-    
     // Convert to blob and create audio
     const audioBlob = await new Response(audioStream).blob();
     const audioUrl = URL.createObjectURL(audioBlob);
@@ -65,7 +59,6 @@ async function speakTextWithElevenLabs(text: string, onUserInteractionRequired?:
     
     // Cleanup function
     const cleanup = () => {
-      console.log("🧹 Cleaning up audio");
       audio.pause();
       audio.currentTime = 0;
       URL.revokeObjectURL(audioUrl);
@@ -75,29 +68,18 @@ async function speakTextWithElevenLabs(text: string, onUserInteractionRequired?:
     };
     
     // Add event listeners for cleanup
-    audio.onended = () => {
-      console.log("✅ Audio playback finished");
-      cleanup();
-    };
-    
-    audio.onerror = (e) => {
-      console.error("❌ Audio playback error:", e);
-      cleanup();
-    };
+    audio.onended = cleanup;
+    audio.onerror = cleanup;
     
     // Store reference for later stopping
     currentAudioRefs.current = { stop: cleanup, audio };
     
     // Try to play
     try {
-      console.log("▶️ Attempting to play audio...");
       await audio.play();
-      console.log("🎵 Audio playing successfully");
       return { stop: cleanup, audio };
     } catch (playError: any) {
-      console.log("⚠️ Audio play error:", playError);
       if (playError.name === 'NotAllowedError' && onUserInteractionRequired) {
-        console.log("👆 User interaction required for audio playback");
         onUserInteractionRequired();
         
         // Return function to play after interaction
@@ -119,7 +101,7 @@ async function speakTextWithElevenLabs(text: string, onUserInteractionRequired?:
     }
     
   } catch (err) {
-    console.error("❌ ElevenLabs TTS error:", err);
+    console.error("ElevenLabs TTS error:", err);
     return null;
   }
 }
@@ -127,7 +109,6 @@ async function speakTextWithElevenLabs(text: string, onUserInteractionRequired?:
 // FIXED: Stop all audio function
 function stopAllAudio() {
   if (currentAudioRefs.current) {
-    console.log("🛑 Stopping all audio");
     currentAudioRefs.current.stop();
     currentAudioRefs.current = null;
   }
@@ -194,13 +175,12 @@ function TanakiExperience() {
   const [interimTranscript, setInterimTranscript] = useState("");
   const [finalTranscript, setFinalTranscript] = useState("");
 
-  // TTS processing refs - NEW: For preventing continuous re-processing
-  const processedTtsEventsRef = useRef<Set<string>>(new Set());
-  const lastTtsProcessingTimeRef = useRef<number>(Date.now());
+  // Debug state to track events
+  const [debugLog, setDebugLog] = useState<string[]>([]);
 
-  // Update timestamp - SLOWER to reduce re-renders
+  // Update timestamp
   useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 1000); // Changed from 200ms to 1000ms
+    const id = window.setInterval(() => setNow(Date.now()), 200);
     return () => window.clearInterval(id);
   }, []);
 
@@ -268,9 +248,21 @@ function TanakiExperience() {
     unlockedOnceRef.current = true;
   }, []);
 
-  // FIXED: Get ALL recent events properly - REMOVED console.log that caused continuous logging
+  // FIXED: Get ALL recent events properly
   const recentEvents = useMemo(() => {
     const chatDurationMs = 60000; // 60 seconds for chat display
+    
+    // Log all events for debugging
+    if (events.length > 0) {
+      console.log("All events:", events);
+      const saysEvents = events.filter(e => 
+        e._kind === "interactionRequest" && e.action === "says"
+      );
+      if (saysEvents.length > 0) {
+        console.log("Says events found:", saysEvents);
+        console.log("First says event content:", saysEvents[0]?.content);
+      }
+    }
     
     // Filter for recent events
     const relevant = events.filter((e) => {
@@ -306,46 +298,64 @@ function TanakiExperience() {
     }
   }, [audioUnlocked]);
 
-  // FIXED: Main TTS processing effect - NO CONTINUOUS FETCHING
-  useEffect(() => {
-    // Debounce: Only process every 1 second to prevent continuous runs
-    const currentTime = Date.now();
-    if (currentTime - lastTtsProcessingTimeRef.current < 1000) {
-      return;
-    }
-    lastTtsProcessingTimeRef.current = currentTime;
+  // FIXED: Main TTS processing effect
+// Add these refs near your other refs (around line 98-100):
+const lastTtsProcessingTimeRef = useRef<number>(Date.now());
+const processedEventIdsRef = useRef<Set<string>>(new Set());
 
-    // Get ALL "says" events from the last 60 seconds for TTS
+// REPLACE the entire TTS useEffect (lines 237-319) with this:
+
+  // FIXED: Main TTS processing effect with debouncing
+  useEffect(() => {
+    // Debounce to prevent continuous processing
+    const nowTime = Date.now();
+    if (nowTime - lastTtsProcessingTimeRef.current < 1000) {
+      return; // Only process every 1 second
+    }
+    lastTtsProcessingTimeRef.current = nowTime;
+
+    // Get ALL "says" events from the last 30 seconds for TTS
     const ttsEvents = events
       .filter((e) => e._kind === "interactionRequest" && e.action === "says" && e.content)
-      .filter((e) => currentTime - e._timestamp >= 0 && currentTime - e._timestamp < 60000) // 60 seconds for TTS
+      .filter((e) => nowTime - e._timestamp >= 0 && nowTime - e._timestamp < 30000) // 30 seconds for TTS
       .sort((a, b) => (a._timestamp || 0) - (b._timestamp || 0)); // Oldest first
   
     if (ttsEvents.length === 0) return;
     
-    // Find the most recent complete response
+    // Find the most recent UNPROCESSED event
+    let eventToProcess = null;
+    
+    // Check from newest to oldest for unprocessed events
+    for (let i = ttsEvents.length - 1; i >= 0; i--) {
+      const event = ttsEvents[i];
+      if (!processedEventIdsRef.current.has(event._id)) {
+        eventToProcess = event;
+        break;
+      }
+    }
+    
+    // If all events are processed, use the latest one anyway (for re-speaking)
+    if (!eventToProcess) {
+      eventToProcess = ttsEvents[ttsEvents.length - 1];
+    }
+    
+    // Mark as processed
+    processedEventIdsRef.current.add(eventToProcess._id);
+    
+    // Group events by conversation ID or get the latest complete response
+    // Find the latest completed response starting from our event
     let latestCompleteEvent = null;
     let accumulatedText = "";
     
-    // Work backwards from newest to find complete responses
-    for (let i = ttsEvents.length - 1; i >= 0; i--) {
+    // Work backwards from our event to find complete responses
+    const eventIndex = ttsEvents.findIndex(e => e._id === eventToProcess._id);
+    for (let i = eventIndex; i >= 0; i--) {
       const event = ttsEvents[i];
-      
-      // Skip if already processed
-      if (processedTtsEventsRef.current.has(event._id)) {
-        continue;
-      }
-      
-      // Add this event's content to accumulated text
       accumulatedText = event.content + (accumulatedText ? " " + accumulatedText : "");
       
-      // Mark as processed
-      processedTtsEventsRef.current.add(event._id);
-      
-      // Check if this looks like a complete response (ends with punctuation or is long)
+      // Check if this looks like a complete response
       const endsWithPunctuation = /[.!?]\s*$/.test(event.content);
-      const isLongEnough = event.content.length > 50;
-      const isComplete = endsWithPunctuation || isLongEnough;
+      const isComplete = endsWithPunctuation || event.content.length > 80;
       
       if (isComplete) {
         latestCompleteEvent = {
@@ -356,47 +366,42 @@ function TanakiExperience() {
       }
     }
     
-    // If no complete response found, use the latest unprocessed text
-    if (!latestCompleteEvent && ttsEvents.length > 0) {
-      for (let i = ttsEvents.length - 1; i >= 0; i--) {
-        const event = ttsEvents[i];
-        if (!processedTtsEventsRef.current.has(event._id)) {
-          latestCompleteEvent = {
-            id: event._id,
-            content: event.content.trim()
-          };
-          processedTtsEventsRef.current.add(event._id);
-          break;
-        }
-      }
+    // If no complete response found, use the event's text
+    if (!latestCompleteEvent) {
+      latestCompleteEvent = {
+        id: eventToProcess._id,
+        content: eventToProcess.content.trim()
+      };
     }
     
     if (!latestCompleteEvent) return;
     
-    // Skip if already speaking this exact response
+    // FIXED: Only process if this is a NEW response
     if (currentSpeakingRef.current?.id === latestCompleteEvent.id) {
+      // Already speaking this response
       setLiveText(latestCompleteEvent.content);
       return;
     }
     
-    console.log("🔊 Processing TTS response:", {
+    // FIXED: Stop any current audio and process new response
+    stopAllAudio();
+    
+    console.log("Processing new TTS response:", {
       id: latestCompleteEvent.id,
-      contentPreview: latestCompleteEvent.content.substring(0, 150) + (latestCompleteEvent.content.length > 150 ? "..." : ""),
+      content: latestCompleteEvent.content.substring(0, 100) + "...",
       length: latestCompleteEvent.content.length
     });
     
-    // Stop any current audio
-    stopAllAudio();
-    
     // Update state
     currentSpeakingRef.current = latestCompleteEvent;
+    lastProcessedResponseId.current = latestCompleteEvent.id;
     setLiveText(latestCompleteEvent.content);
     
-    // Speak the FULL text if not muted
+    // Speak the text if not muted
     if (!isMuted && latestCompleteEvent.content) {
       const playAudio = async () => {
         const audioResult = await speakTextWithElevenLabs(
-          latestCompleteEvent.content, // FULL TEXT
+          latestCompleteEvent.content,
           () => {
             pendingAudioRef.current = async () => {
               if (audioResult?.playAfterInteraction) {
@@ -413,17 +418,15 @@ function TanakiExperience() {
       
       playAudio();
     }
-  }, [events, isMuted]); // Removed `now` dependency to prevent continuous runs
+  }, [events, isMuted]); // Remove `now` from dependencies
   
-  // Clean up processed events periodically
+  // Add cleanup for processed events
   useEffect(() => {
     const interval = setInterval(() => {
       // Clear old processed events every 2 minutes
-      const twoMinutesAgo = Date.now() - 120000;
-      // We'll just clear all for simplicity
-      processedTtsEventsRef.current.clear();
-      console.log("🧹 Cleared processed TTS events cache");
-    }, 120000);
+      processedEventIdsRef.current.clear();
+      console.log("Cleared processed events cache");
+    }, 120000); // 2 minutes
 
     return () => clearInterval(interval);
   }, []);
@@ -451,9 +454,7 @@ function TanakiExperience() {
   const handleSendMessage = async (text: string) => {
     if (!text.trim() || !connected) return;
     
-    console.log("📤 Sending message:", text);
-    
-    // Stop current audio when user sends new message
+    // FIXED: Stop current audio when user sends new message
     stopAllAudio();
     
     const userMessage = {
@@ -698,7 +699,7 @@ function TanakiExperience() {
             </div>
           </div>
 
-          {/* Chat Messages */}
+          {/* Chat Messages - FIXED VERSION */}
           <div className="flex-1 overflow-y-auto p-4 rounded-2xl bg-black/10 border border-cyan-500/10 shadow-inner mt-3 chat-messages">
             {chatMessages.length === 0 ? (
               <div className="text-center py-8 text-cyan-300/50">
