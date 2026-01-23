@@ -175,6 +175,9 @@ function TanakiExperience() {
   const [interimTranscript, setInterimTranscript] = useState("");
   const [finalTranscript, setFinalTranscript] = useState("");
 
+  // Debug state to track events
+  const [debugLog, setDebugLog] = useState<string[]>([]);
+
   // Update timestamp
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 200);
@@ -245,14 +248,27 @@ function TanakiExperience() {
     unlockedOnceRef.current = true;
   }, []);
 
-  // FIXED: Filter events - use shorter duration for chat
+  // FIXED: Get ALL recent events properly
   const recentEvents = useMemo(() => {
-    const chatDurationMs = 10000; // Short for chat display
-    const ttsDurationMs = 30000; // Longer for TTS processing
+    const chatDurationMs = 60000; // 60 seconds for chat display
     
+    // Log all events for debugging
+    if (events.length > 0) {
+      console.log("All events:", events);
+      const saysEvents = events.filter(e => 
+        e._kind === "interactionRequest" && e.action === "says"
+      );
+      if (saysEvents.length > 0) {
+        console.log("Says events found:", saysEvents);
+        console.log("First says event content:", saysEvents[0]?.content);
+      }
+    }
+    
+    // Filter for recent events
     const relevant = events.filter((e) => {
-      if (e._kind === "perception") return !e.internal && e.action === "said";
-      if (e._kind === "interactionRequest") return e.action === "says";
+      // Include both perception and interactionRequest events
+      if (e._kind === "perception" && !e.internal && e.action === "said") return true;
+      if (e._kind === "interactionRequest" && e.action === "says") return true;
       return false;
     });
 
@@ -291,6 +307,9 @@ function TanakiExperience() {
       .sort((a, b) => (a._timestamp || 0) - (b._timestamp || 0)); // Oldest first
   
     if (ttsEvents.length === 0) return;
+    
+    // Log for debugging
+    console.log("TTS Events to process:", ttsEvents.length, ttsEvents);
     
     // Group events by conversation ID or get the latest complete response
     // Find the latest completed response
@@ -418,7 +437,7 @@ function TanakiExperience() {
   };
 
   const recentUserMessages = useMemo(() => {
-    const baseDurationMs = 15000; // Match chat display duration
+    const baseDurationMs = 60000; // 60 seconds for user messages
     return userMessages.filter(msg => 
       now - msg.timestamp.getTime() >= 0 && now - msg.timestamp.getTime() < baseDurationMs
     );
@@ -443,6 +462,38 @@ function TanakiExperience() {
   ];
 
   const mobileMenuItems = ["Dashboard", "Community", "Models", "Features", "Settings"];
+
+  // Get all chat messages to display
+  const chatMessages = useMemo(() => {
+    const allMessages = [];
+    
+    // Add user messages
+    recentUserMessages.forEach(msg => {
+      allMessages.push({
+        id: msg.id,
+        text: msg.text,
+        timestamp: msg.timestamp.getTime(),
+        isAI: false,
+        isSpeaking: false
+      });
+    });
+    
+    // Add AI messages from events
+    const aiEvents = recentEvents
+      .filter(e => e._kind === "interactionRequest" && e.action === "says" && e.content)
+      .map(event => ({
+        id: event._id,
+        text: event.content || "",
+        timestamp: event._timestamp || Date.now(),
+        isAI: true,
+        isSpeaking: currentSpeakingRef.current?.id === event._id
+      }));
+    
+    allMessages.push(...aiEvents);
+    
+    // Sort by timestamp (oldest first)
+    return allMessages.sort((a, b) => a.timestamp - b.timestamp);
+  }, [recentUserMessages, recentEvents]);
 
   return (
     <div
@@ -606,18 +657,15 @@ function TanakiExperience() {
             </div>
           </div>
 
+          {/* Chat Messages - FIXED VERSION */}
           <div className="flex-1 overflow-y-auto p-4 rounded-2xl bg-black/10 border border-cyan-500/10 shadow-inner mt-3 chat-messages">
-            {[...recentUserMessages, ...recentEvents
-              .filter(e => e._kind === "interactionRequest" && e.action === "says" && e.content)
-              .map(event => ({
-                id: event._id,
-                text: event.content,
-                timestamp: new Date(event._timestamp || Date.now()),
-                isAI: true
-              }))]
-              .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
-              .slice(-10)
-              .map((msg) => (
+            {chatMessages.length === 0 ? (
+              <div className="text-center py-8 text-cyan-300/50">
+                <div className="text-lg mb-2">Start a conversation</div>
+                <div className="text-sm">Type a message or use voice chat</div>
+              </div>
+            ) : (
+              chatMessages.slice(-15).map((msg) => (
                 <div 
                   key={msg.id}
                   className={`mb-3 p-3 rounded-xl ${
@@ -641,6 +689,12 @@ function TanakiExperience() {
                         <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-pulse"></div>
                       </div>
                     )}
+                    {msg.isSpeaking && (
+                      <div className="flex items-center gap-1 bg-purple-500/20 px-2 py-1 rounded-full">
+                        <span className="text-xs text-purple-300 font-medium">SPEAKING</span>
+                        <div className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-pulse"></div>
+                      </div>
+                    )}
                   </div>
                   <div className={`text-sm ${
                     msg.isAI ? "text-purple-100" : "text-cyan-100"
@@ -648,14 +702,7 @@ function TanakiExperience() {
                     {msg.text}
                   </div>
                 </div>
-              ))}
-            
-            {recentUserMessages.length === 0 && 
-             recentEvents.filter(e => e._kind === "interactionRequest" && e.action === "says").length === 0 && (
-              <div className="text-center py-8 text-cyan-300/50">
-                <div className="text-lg mb-2"></div>
-                <div className="text-sm"></div>
-              </div>
+              ))
             )}
           </div>
 
